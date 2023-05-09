@@ -1,0 +1,705 @@
+---
+title: "Hurricane_preliminary_summary"
+author: "Daniel Dean"
+date: "10/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Visual Overview of process (1st draft)
+
+
+![First pass on a visual overview](cira_conceptual_diagram_v1.png)
+
+
+## Importing Data
+
+> 1) For storm exposure data, using the `storm_winds` dataset from the `hurricaneexposuredata` package.
+
+> 2) For an example of monthly mortality data, importing 2016-2018 FL and GA mortality figures from CDC Wonder (still working on API process; using a locally-saved copy for now).
+
+```{r}
+#still trying to work out API; in theory should be able to obtain XMLs using `view source`, but it points me to an ~access denied page.
+
+#Can export query-specific URLs (e.g. https://wonder.cdc.gov/controller/saved/D76/D93F306 for Louisiana data from 2018, all-causes, grouped by ICD chapter and subchapter), but so far can't figure out if I can use that to get XMLs
+
+```
+  
+>> The CDC does not provide county populations in the monthly data (understandably given that I believe even annnual populations are estimated, not to mention deaths, births, migration/emmigration, etc.), so for this example I'm joining populations from an annual summary on the assumption the baseline populations should still give a sense of trends.
+
+>> Also, they *do* censor rare deaths; "2. Data are Suppressed when the data meet the criteria for confidentiality constraints (https://wonder.cdc.gov/wonder/help/ucd.html#Unreliable)"
+
+>> Also: I haven't so far due to row number limits in the CDC portal, but would we want to examine this by race, etc.? I could see that being relevant, although if the underlying model was calculated with the general population it would probably be best to keep with an aggregated population. 
+
+> Note: There are ~40 warning codes generated, which is because the CDC data includes a block of search parameters, etc., at the end
+
+>!: Update on API: thinking this is a non-starter as I get farther into it--some ~requisite links seem to be dead, so unless I can somehow ~automate the GUI, not looking promising. On the bright side, when I par it down to one year, I can download a state's data w/ all ICD-10 subchapter detail.
+
+>> So I could download e.g. all states' 2018 ICD-10 subchapter-level data aggregated across sex/race/etc in 50 runs; definitely doable in a matter of hours. 
+>> HOWEVER, that's 50 runs for *each* year--still feasible, but even at e.g. 3 years, that becomes a decent time commitment. Also I think Puerto Rico, etc., would be salient.  <-- *also, maybe half of states are represented; let's see:*
+
+```{r message = FALSE, warning = FALSE}
+
+storm_wind_states <- hurricaneexposuredata::storm_winds %>% filter(vmax_sust >= 12) %>% left_join(county_centers) %>% select(state_name) %>% unique() %>% as.list()
+
+storm_wind_states
+
+```
+
+# So 32 states (counting DC--Puerto Rico doesn't seem to be included, though!); still a decent number
+
+>> Let's see how many states and/or years I can get at once?
+
+>> Trying to download a year's worth of all 5(1) states (annual resolution) generates ~11x as many rows as are allowed, so in theory I should be able to get maybe 4-5 states per pass.
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+# libraries
+
+library(hurricaneexposuredata)
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+
+
+
+# 1) using `storm_winds` dataset:
+
+hurricaneexposuredata::storm_winds %>%
+  head()
+
+# 2) monthly Florida mortaliry (from CDC Wonder):
+
+
+mortality_all_fl_ga_monthly_2016_18 <- read_tsv("../../Downloads/all_cause_mortality_2016_18_monthly_FL_GA.txt")
+#Oh, so monthly data doesn't have population data attached--I guess that's fair
+mortality_all_fl_ga_2016_18 <- read_tsv("../../Downloads/all_cause_mortality_2016_18_FL_GA.txt")
+  #Note that this is a considerable assumption; `NA` for a reason in monthly data
+
+
+mortality_all_fl_ga_monthly_2016_18 %>%
+  head()
+
+mortality_all_fl_ga_2016_18 %>%
+  head()
+
+# Merging monthly and annual data:
+  # Also standardizing FIPS code format with storm data for easier merging downstream
+
+
+mortality_all_fl_ga_monthly_2016_18_with_yr_pop <- mortality_all_fl_ga_monthly_2016_18 %>%
+  select(-Population, -`Crude Rate`) %>%
+  left_join((mortality_all_fl_ga_2016_18 %>%
+               select(County, Population)), by = "County") %>%
+  clean_names() %>% 
+              mutate(fips = str_replace(as.character(county_code),
+                                        pattern = "^([0-9]{4})$",
+                                        replacement = "0\\1"))
+
+mortality_all_fl_ga_monthly_2016_18_with_yr_pop %>%
+  head()
+
+```
+
+
+## Loading specific causes of mortality (ICD 9)
+
+Full documentation: https://wonder.cdc.gov/wonder/help/ucd.html#
+
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+# Making the assumption that county-level populations should be equal
+
+
+mortality_cardio_icd10_fl_ga_monthly_2016_18 <- read_tsv("../../Downloads/circulatory_1cd10_mortality_2016_18_monthly_FL_GA.txt")
+#Oh, so monthly data doesn't have population data attached--I guess that's fair
+
+mortality_respiratory_icd10_fl_ga_monthly_2016_18 <- read_tsv("../../Downloads/respiratory_mortality_2016_18_monthly_FL_GA.txt")
+
+
+mortality_accident_icd10_fl_ga_monthly_2016_18 <- read_tsv("../../Downloads/accident_mortality_2016_18_monthly_FL_GA.txt")
+
+
+
+mortality_cardio_fl_ga_monthly_2016_18_with_yr_pop <- mortality_cardio_icd10_fl_ga_monthly_2016_18 %>%
+  select(-Population, -`Crude Rate`) %>%
+  left_join((mortality_all_fl_ga_2016_18 %>%
+               select(County, Population)), by = "County") %>%
+  clean_names() %>% 
+              mutate(fips = str_replace(as.character(county_code),
+                                        pattern = "^([0-9]{4})$",
+                                        replacement = "0\\1"))
+
+
+mortality_respiratory_fl_ga_monthly_2016_18_with_yr_pop <- mortality_respiratory_icd10_fl_ga_monthly_2016_18 %>%
+  select(-Population, -`Crude Rate`) %>%
+  left_join((mortality_all_fl_ga_2016_18 %>%
+               select(County, Population)), by = "County") %>%
+  clean_names() %>% 
+              mutate(fips = str_replace(as.character(county_code),
+                                        pattern = "^([0-9]{4})$",
+                                        replacement = "0\\1"))
+
+
+mortality_accidental_fl_ga_monthly_2016_18_with_yr_pop <- mortality_accident_icd10_fl_ga_monthly_2016_18 %>%
+  select(-Population, -`Crude Rate`) %>%
+  left_join((mortality_all_fl_ga_2016_18 %>%
+               select(County, Population)), by = "County") %>%
+  clean_names() %>% 
+              mutate(fips = str_replace(as.character(county_code),
+                                        pattern = "^([0-9]{4})$",
+                                        replacement = "0\\1"))
+
+# Oh, could also make RRs more modular; using figures from NEJM supplement
+  #order is 12, 15,18,21
+
+all_cause_rr <- c(1.03, 1.03, 1.05, 1.07)
+cardio_rr <- c(1.02, 1.03, 1.03, 1.03)
+respiratory_rr <- c(1.01, 0.99, 1.02, 1.05)
+accidental_rr <- c(1.34, 1.54, 1.81, 2.42)
+
+
+```
+
+## (Placeholder for ICD 10-to-ICD 9 conversion)
+
+
+** NOTE: Ultimately I need to use a version of the cardiovascular deaths split out by subchapters so I can remove the groups not accounted for in ICD-9 **
+
+** Also, "external causes" is broader than accidental, so also need to download to ICD subchapter resolution; this increases the number of rows dramatically, so I almost definitely need the API running here**
+
+Relevant text from NEJM paper:
+
+> "For each study community, a time series of daily mortality counts was available for 1988–2005 for all community residents for four categories of deaths: all-cause (International Classification of Diseases, Ninth Revision (ICD-9), 001–999), accidental (ICD-9, 800–999), cardiovascular (ICD-9 codes 390–448), and respiratory (ICD-9 codes 480–486, 490–497, or 507)."
+
+Here's what looks like a resource for conversion; reading what flags/metadat means: https://data.nber.org/data/icd9-icd-10-cm-and-pcs-crosswalk-general-equivalence-mapping.html
+
+> This looks like it will take some work (although I think regex can handle it, assuming I don't find a more conventient format), but the general approach would be to filter the ICD9 column to the target codes, and use the corresponding ICD10 rows for mortality data.
+
+> If (once) I get the API running, I could theoretically download high-"resolution" datasets with smaller ranges of ICD codes, and then just treat mortality type as metadata (i.e. have a column with "Respiratory", "Circulatory", etc. and subset as needed for plots/analysis)--this would have the advantage of allowing easier facetting, etc. 
+
+```{r message = FALSE, warning = FALSE}
+icd_9_to_10 <- read_csv("icd9toicd10cmgem.csv")
+icd_10_to_9 <- read_csv("icd10cmtoicd9gem.csv")
+
+icd_9_list_accidental <- c(800:999)
+icd_9_list_cardiovascular <- c(390:448)
+icd_list_respiratory <- c(480:486, 490:497, 507)
+
+icd_9_to_10 %>% head()
+# Looking like this will take some rearrangement; codes in CDC data are provided as e.g. "C00-D48" for "Neoplasms"; the corresponding ICD10 codes here would I think be "C000-D048"; there are some ~odd codes that the end that don't fit this format. Hopefully the groupings are close enough to equivalent?
+  
+```
+
+
+## Inital Data Summary and Exploration Steps
+
+> 1) Visualizing baseline trends in mortality; emphasizing counties with at least 400,000 residents to match model assumptions
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+
+mortality_all_fl_ga_monthly_2016_18_with_yr_pop %>%
+  filter(!is.na(month)) %>%
+  filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/(population / 100000),
+    #group = county,
+    fill = state,
+    #alpha = population >= 400000
+  ) +
+  geom_violin() +
+  theme_classic() +
+  labs(
+    title = "All-cause mortality by month",
+    subtitle = "(Florida and Georgia, 2016-18)",
+    x = "Month (numeric)",
+    y = "Deaths per 100,000 residents"
+  ) +
+  facet_wrap(. ~ state)
+
+```
+
+```{r include = FALSE}
+mortality_all_fl_ga_monthly_2016_18_with_yr_pop %>%
+  filter(!is.na(month)) %>%
+  #filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/population,
+    group = county,
+    color = state,
+    alpha = population >= 400000
+  ) +
+  geom_point() +
+  facet_wrap(. ~ str_extract(month_code, pattern = "^[0-9]{4}")) +
+  #facet_wrap(. ~ state) +
+  theme_classic() 
+
+
+```
+  >> At least subjectively, I'm seeing a moderate peak in winter months (hard to tell if some are ~stable peaks in the long run), but nothing too dramatic. 
+  
+# Cardiovascular
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+
+mortality_cardio_fl_ga_monthly_2016_18_with_yr_pop %>%
+  filter(!is.na(month)) %>%
+  filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/(population / 100000),
+    #group = county,
+    fill = state,
+    #alpha = population >= 400000
+  ) +
+  geom_violin() +
+  theme_classic() +
+  labs(
+    title = "Cardiovascular (ICD10) mortality by month",
+    subtitle = "(Florida and Georgia, 2016-18)",
+    x = "Month (numeric)",
+    y = "Deaths per 100,000 residents"
+  ) +
+  facet_wrap(. ~ state)
+```
+
+```{r include = FALSE}
+
+mortality_cardio_fl_ga_monthly_2016_18_with_yr_pop%>%
+  filter(!is.na(month)) %>%
+  #filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/population,
+    group = county,
+    color = state,
+    alpha = population >= 400000
+  ) +
+  geom_point() +
+  #facet_wrap(. ~ str_extract(month_code, pattern = "^[0-9]{4}")) +
+  facet_wrap(. ~ state) +
+  theme_classic()
+
+
+```
+  
+# Respiratory
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+
+mortality_respiratory_fl_ga_monthly_2016_18_with_yr_pop %>%
+  filter(!is.na(month)) %>%
+  filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/(population / 100000),
+    #group = county,
+    fill = state,
+    #alpha = population >= 400000
+  ) +
+  geom_violin() +
+  theme_classic() +
+  labs(
+    title = "Respiratory (ICD10) mortality by month",
+    subtitle = "(Florida and Georgia, 2016-18)",
+    x = "Month (numeric)",
+    y = "Deaths per 100,000 residents"
+  ) +
+  facet_wrap(. ~ state)
+```
+
+```{r include = FALSE}
+
+mortality_respiratory_fl_ga_monthly_2016_18_with_yr_pop%>%
+  filter(!is.na(month)) %>%
+  #filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/population,
+    group = county,
+    color = state,
+    alpha = population >= 400000
+  ) +
+  geom_point() +
+  #facet_wrap(. ~ str_extract(month_code, pattern = "^[0-9]{4}")) +
+  facet_wrap(. ~ state) +
+  theme_classic()
+
+
+```  
+  
+
+# accidental
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+
+mortality_accidental_fl_ga_monthly_2016_18_with_yr_pop %>%
+  filter(!is.na(month)) %>%
+  filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/(population / 100000),
+    #group = county,
+    fill = state,
+    #alpha = population >= 400000
+  ) +
+  geom_violin() +
+  theme_classic() +
+  labs(
+    title = "'External' (ICD10) mortality by month",
+    subtitle = "(Florida and Georgia, 2016-18)",
+    x = "Month (numeric)",
+    y = "Deaths per 100,000 residents"
+  ) +
+  facet_wrap(. ~ state)
+```
+
+```{r include = FALSE}
+mortality_accidental_fl_ga_monthly_2016_18_with_yr_pop%>%
+  filter(!is.na(month)) %>%
+  #filter(population >= 400000) %>%
+  ggplot() +
+  aes(
+    #x = str_extract(month, pattern = "[A-Za-z]{3}"),
+    x = factor(str_extract(month_code, pattern = "[0-9]{2}$")),
+    y = deaths/population,
+    group = county,
+    color = state,
+    alpha = population >= 400000
+  ) +
+  geom_point() +
+ # facet_wrap(. ~ str_extract(month_code, pattern = "^[0-9]{4}")) +
+  facet_wrap(. ~ state) +
+  theme_classic()
+
+
+```  
+  
+## Exploring storm wind exposure data:
+
+* I'd misread the documentation earlier and thought this was in knots instead of already in m/s*
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+
+# proportion by exposure category
+
+storm_winds %>%
+   mutate(
+     year = str_extract(storm_id, pattern = "[0-9]{4}$"),
+     exp_group = case_when(
+    (vmax_sust >= 21) ~ "exp_21_ms",
+    (vmax_sust >= 18) ~ "exp_18_ms",
+    (vmax_sust >= 15) ~ "exp_15_ms",
+    (vmax_sust >= 12) ~ "exp_12_ms",
+    (vmax_sust < 12) ~ "exp_null")
+  ) %>%
+  group_by(year, exp_group) %>%
+  nest() %>%
+  mutate(event_count = purrr::map(.x = data,
+                            .f = ~nrow(.x))) %>%
+  unnest(data, event_count) %>%
+  select(year, event_count, exp_group) %>%
+  filter(exp_group != "exp_null") %>%
+  unique() %>%
+  ggplot() +
+  aes(
+    x = as.numeric(year),
+    y = event_count,
+    color = exp_group
+  ) +
+  geom_path() +
+  #facet_wrap(. ~ exp_group == "exp_null", scales = 'free') +
+  theme_classic() +
+  labs(
+    title = "Events per year by wind speed and year",
+    subtitle = "(Excluding events with wind <12 m/s)",
+    x = "Year",
+    y = "Event Count",
+    color = "Wind Speed Group"
+  ) +
+  scale_colour_viridis_d()
+
+```
+  
+## Merging with storm exposure data
+
+> Here I'm using the above data (although aggregating across months for now) as a ~proof of concept. I'm using the exposure thresholds and risk ratios from the NEJM paper's supplemental material for the 10-day exposure period.
+
+# Elevated deaths by storm category, number of events per year:
+
+> All-cause mortality
+
+```{r warning = FALSE, echo = TRUE}
+
+year_count = 3 # manually setting for now; 2016-8
+
+storm_winds %>%
+  #filter(vmax_sust >= 21) %>%
+   mutate(exp_group = case_when(
+    vmax_sust >= 21 ~ "exp_21_ms",
+    vmax_sust >= 18 ~ "exp_18_ms",
+    vmax_sust >= 15 ~ "exp_15_ms",
+    vmax_sust >= 12 ~ "exp_12_ms",
+    vmax_sust < 12 ~ "exp_null"
+        ),
+    exp_rr = case_when(
+      exp_group == 'exp_21_ms' ~ all_cause_rr[4],
+      exp_group == 'exp_18_ms' ~ all_cause_rr[3],
+      exp_group == 'exp_15_ms' ~ all_cause_rr[2],
+      exp_group == 'exp_12_ms' ~ all_cause_rr[1],
+      exp_group == 'exp_null' ~ 1.00,
+    )) %>%
+  group_by(fips, exp_group) %>%
+  nest() %>%
+  mutate(events = purrr::map(.x = data, .f = ~nrow(.x)),
+         events_yr = purrr::map(.x = data, .f = ~nrow(.x) / year_count)) %>% # 1988 - 2005 = 17yr
+  unnest(cols = c(data, events, events_yr)) %>%
+  right_join(mortality_all_fl_ga_monthly_2016_18_with_yr_pop,
+            by = c("fips")) %>%
+  mutate(total_deaths_avg_day = (deaths / year_count) / 365,
+         death_risk_avg_day = total_deaths_avg_day / population) %>%
+  filter(population >= 400000, exp_group != "exp_null") %>%
+  select(state, county, fips, population, exp_group, exp_rr, events, events_yr, month, month_code, total_deaths_avg_day, death_risk_avg_day) %>%
+  unique() %>%
+  mutate(event_days_yr = events_yr * 10,
+         elev_death_risk = death_risk_avg_day * exp_rr * event_days_yr,
+         elev_death = (elev_death_risk * population) - 
+           (elev_death_risk/exp_rr * population) ) %>%
+  unique() %>%
+  ggplot() +
+  aes(
+    x = event_days_yr,
+    y = elev_death,
+    color = exp_group
+  ) +
+  geom_point() +
+  facet_wrap(. ~ exp_group) +
+  theme_classic() +
+  scale_color_viridis_d()
+
+
+```
+
+## Total predicted elevated deaths (over 3 years, currently) by storm category:
+
+```{r warning = FALSE, echo = TRUE}
+
+# cumulative (across counties)
+
+storm_winds %>%
+  #filter(vmax_sust >= 21) %>%
+   mutate(exp_group = case_when(
+    vmax_sust >= 21 ~ "exp_21_ms",
+    vmax_sust >= 18 ~ "exp_18_ms",
+    vmax_sust >= 15 ~ "exp_15_ms",
+    vmax_sust >= 12 ~ "exp_12_ms",
+    vmax_sust < 12 ~ "exp_null"
+        ),
+    exp_rr = case_when(
+      exp_group == 'exp_21_ms' ~ all_cause_rr[4],
+      exp_group == 'exp_18_ms' ~ all_cause_rr[3],
+      exp_group == 'exp_15_ms' ~ all_cause_rr[2],
+      exp_group == 'exp_12_ms' ~ all_cause_rr[1],
+      exp_group == 'exp_null' ~ 1.00,
+    )) %>%
+  group_by(fips, exp_group) %>%
+  nest() %>%
+  mutate(events = purrr::map(.x = data, .f = ~nrow(.x)),
+         events_yr = purrr::map(.x = data, .f = ~nrow(.x) / year_count)) %>% # 1988 - 2005 = 17yr
+  unnest(cols = c(data, events, events_yr)) %>%
+  right_join(mortality_all_fl_ga_monthly_2016_18_with_yr_pop,
+            by = c("fips")) %>%
+  mutate(total_deaths_avg_day = (deaths / year_count) / 365,
+         death_risk_avg_day = total_deaths_avg_day / population) %>%
+  filter(population >= 400000, exp_group != "exp_null") %>%
+  select(state, county, fips, population, exp_group, exp_rr, events, events_yr, month, month_code, total_deaths_avg_day, death_risk_avg_day) %>%
+  unique() %>%
+  #group_by(name) %>%
+  #nest() %>%
+  #mutate(total_deaths = purrr::map(.x = data, .f = ~sum(.x$deaths))) %>%
+  #unnest(cols = c(data, total_deaths)) %>%
+ # I'm assuming 17yr between 1999-2016
+  mutate(event_days_yr = events_yr * 10,
+         elev_death_risk = death_risk_avg_day * exp_rr * event_days_yr,
+         elev_death = (elev_death_risk * population) - 
+           (elev_death_risk/exp_rr * population) ) %>%
+  group_by(county, exp_group) %>%
+  nest() %>%
+  mutate(total_elev_death = purrr::map(.x = data,
+                                       .f = ~sum(.x$elev_death))) %>%
+  unnest(cols = c(data, total_elev_death)) %>%
+  unique() %>%
+  ggplot() +
+  aes(
+    x = exp_group,
+    y = total_elev_death,
+    #color = exp_group,
+    fill = exp_group
+  ) +
+  geom_violin() +
+  theme_classic() +
+  scale_fill_viridis_d() +
+  labs(
+    title = "Predicted Elevated All-Cause Deaths by Category",
+    y = "Predicted Excess Deaths",
+    x = "Wind exposure category"
+    )
+
+```
+
+> Accidental deaths
+
+
+> All-cause mortality
+
+```{r warning = FALSE, echo = TRUE}
+
+year_count = 3 # manually setting for now; 2016-8
+
+storm_winds %>%
+  #filter(vmax_sust >= 21) %>%
+   mutate(exp_group = case_when(
+    vmax_sust >= 21 ~ "exp_21_ms",
+    vmax_sust >= 18 ~ "exp_18_ms",
+    vmax_sust >= 15 ~ "exp_15_ms",
+    vmax_sust >= 12 ~ "exp_12_ms",
+    vmax_sust < 12 ~ "exp_null"
+        ),
+     exp_rr = case_when(
+      exp_group == 'exp_21_ms' ~ accidental_rr[4],
+      exp_group == 'exp_18_ms' ~ accidental_rr[3],
+      exp_group == 'exp_15_ms' ~ accidental_rr[2],
+      exp_group == 'exp_12_ms' ~ accidental_rr[1],
+      exp_group == 'exp_null' ~ 1.00,
+    )) %>%
+  group_by(fips, exp_group) %>%
+  nest() %>%
+  mutate(events = purrr::map(.x = data, .f = ~nrow(.x)),
+         events_yr = purrr::map(.x = data, .f = ~nrow(.x) / year_count)) %>% # 1988 - 2005 = 17yr
+  unnest(cols = c(data, events, events_yr)) %>%
+  right_join(mortality_accidental_fl_ga_monthly_2016_18_with_yr_pop,
+            by = c("fips")) %>%
+  mutate(total_deaths_avg_day = (deaths / year_count) / 365,
+         death_risk_avg_day = total_deaths_avg_day / population) %>%
+  filter(population >= 400000, exp_group != "exp_null") %>%
+  select(state, county, fips, population, exp_group, exp_rr, events, events_yr, month, month_code, total_deaths_avg_day, death_risk_avg_day) %>%
+  unique() %>%
+  mutate(event_days_yr = events_yr * 10,
+         elev_death_risk = death_risk_avg_day * exp_rr * event_days_yr,
+         elev_death = (elev_death_risk * population) - 
+           (elev_death_risk/exp_rr * population) ) %>%
+  unique() %>%
+  ggplot() +
+  aes(
+    x = event_days_yr,
+    y = elev_death,
+    color = exp_group
+  ) +
+  geom_point() +
+  facet_wrap(. ~ exp_group) +
+  theme_classic() +
+  scale_color_viridis_d()
+
+
+```
+
+## Total predicted elevated deaths (over 3 years, currently) by storm category:
+
+```{r warning = FALSE, echo = TRUE}
+
+# cumulative (across counties)
+
+storm_winds %>%
+  #filter(vmax_sust >= 21) %>%
+   mutate(exp_group = case_when(
+    vmax_sust >= 21 ~ "exp_21_ms",
+    vmax_sust >= 18 ~ "exp_18_ms",
+    vmax_sust >= 15 ~ "exp_15_ms",
+    vmax_sust >= 12 ~ "exp_12_ms",
+    vmax_sust < 12 ~ "exp_null"
+        ),
+    exp_rr = case_when(
+      exp_group == 'exp_21_ms' ~ accidental_rr[4],
+      exp_group == 'exp_18_ms' ~ accidental_rr[3],
+      exp_group == 'exp_15_ms' ~ accidental_rr[2],
+      exp_group == 'exp_12_ms' ~ accidental_rr[1],
+      exp_group == 'exp_null' ~ 1.00,
+    )) %>%
+  group_by(fips, exp_group) %>%
+  nest() %>%
+  mutate(events = purrr::map(.x = data, .f = ~nrow(.x)),
+         events_yr = purrr::map(.x = data, .f = ~nrow(.x) / year_count)) %>% # 1988 - 2005 = 17yr
+  unnest(cols = c(data, events, events_yr)) %>%
+  right_join(mortality_accidental_fl_ga_monthly_2016_18_with_yr_pop,
+            by = c("fips")) %>%
+  mutate(total_deaths_avg_day = (deaths / year_count) / 365,
+         death_risk_avg_day = total_deaths_avg_day / population) %>%
+  filter(population >= 400000, exp_group != "exp_null") %>%
+  select(state, county, fips, population, exp_group, exp_rr, events, events_yr, month, month_code, total_deaths_avg_day, death_risk_avg_day) %>%
+  unique() %>%
+  #group_by(name) %>%
+  #nest() %>%
+  #mutate(total_deaths = purrr::map(.x = data, .f = ~sum(.x$deaths))) %>%
+  #unnest(cols = c(data, total_deaths)) %>%
+ # I'm assuming 17yr between 1999-2016
+  mutate(event_days_yr = events_yr * 10,
+         elev_death_risk = death_risk_avg_day * exp_rr * event_days_yr,
+         elev_death = (elev_death_risk * population) - 
+           (elev_death_risk/exp_rr * population) ) %>%
+  group_by(county, exp_group) %>%
+  nest() %>%
+  mutate(total_elev_death = purrr::map(.x = data,
+                                       .f = ~sum(.x$elev_death))) %>%
+  unnest(cols = c(data, total_elev_death)) %>%
+  unique() %>%
+  ggplot() +
+  aes(
+    x = exp_group,
+    y = total_elev_death,
+    fill = exp_group
+  ) +
+  geom_violin() +
+  theme_classic() +
+  scale_fill_viridis_d() +
+  labs(
+    title = "Predicted Elevated External Deaths by Category",
+    y = "Predicted Excess Deaths",
+    x = "Wind exposure category"
+    )
+
+```
+
+
+
+## Looking at monthly data for storm events
+
+```{r echo = TRUE, warning = FALSE}
+
+# This appears to be the best source for attaching dates to events
+  # complication in that hurricanes aren't instantaneous events, so I'll need to decide how to parameterize (e.g. 1st or last event, midpoint?)
+  # Ideal scenario would be if I can identify the ~peak exposure date used for the model--I should be able to replicate that from the NEJM paper.
+
+hurr_tracks %>%
+  head()
+
+
+
+```

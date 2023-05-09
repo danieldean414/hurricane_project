@@ -1,0 +1,709 @@
+---
+title: "hurricane_code_update_feb_21"
+author: "Daniel Dean"
+date: "2/10/2021"
+output: html_document
+
+bibliography: 'zotero_4_1.bib'
+csl: 'environmental-research.csl'
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+
+```
+
+
+
+# Summary Plot
+
+(New, simplified version):
+![Process Overview](../04_writing_etc/simplified_diagram_update.png)
+
+(Old plot; not sure if I'm oversimplifying):
+#![Process Overview](../04_writing_etc/workflow_diagram_vertical.png)
+
+
+
+# A) Data Sources:
+
+We drew on the CDC Wonder repository for 2018 and 2019 all-cause mortality among the 65-and-older at the county level (aggregating across ages, sexes, ethnic groups, etc., for a community total). Crude rates were calculated from mortality prevalence and estimated county populations [CITATION]. County geography was based on 2010 US Census boundaries, and inported using the `tigris` R package (v. 4.03) [*as an aside, can do same process with `tidycensus`, so might switch to that for uniformity if we pull in other census data*]. Synthetic storm tracks were generated using the STORM model based on [~*combinations of ENSO and AMO periodicity; point to Alex's paper*], which consisted of geographic coordinates, wind speeds, and 3-hour timesteps of storms under each scenario. 
+
+A1) Citations
+  (still working out how to integrate a few sources like CDC Wonder into bibtex format)
+  
+  Underlying Cause of Death 1999-2019 on CDC WONDER Online Database, released 2020. Data are compiled from data provided by the 57 vital statistics jurisdictions through the Vital Statistics Cooperative Program.
+
+Centers for Disease Control and Prevention, National Center for Health Statistics. Multiple cause of death 1999–20169on CDC WONDER online database, released 2020.
+
+
+
+
+```{r}
+
+
+# making an equation, and later function, from Nethery et al data:
+
+####### Libraries
+
+library(tidyverse)
+library(tigris)
+library(tidycensus)
+  # I think this covers `sf`, etc. <- still should note specific packages
+library(ggplot2)
+library(janitor)
+library(splines)
+
+library(parallel)
+library(stormwindmodel)
+
+library(hurricaneexposuredata)
+  # Loading data for storm events and properties
+
+####################### Data
+
+wind_mort_data <- read_csv("../01_data/exposure_response_death.csv") # (Bayesian model)
+  ## Note: this only deals w/ events >= 17 m/s
+
+counties_mort_65 <- read_tsv("../01_data/all_cause_mortality_65_plus_county.txt")
+  # From CDC Wonder with:
+    # Age set to 65 and above
+    # years 2018, 2019 (? <-- verify; last 2 available)
+      # suspect a wider range of years might be needed to counteract censoring <-- followup--seems OK so far
+    # No subsetting by age/sex/ethnicity/etc.
+    # all mortality
+    # * At this stage not separating by county pop. -- should consider downstream
+
+us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) # To avoid high-res versions
+
+
+# Importing STORM data
+
+#storm_25yr_sim_raw <- read_csv("../../Downloads/STORM_25_years.csv")
+storm_25yr_sim_raw <- read_csv("../01_data/STORM_25_years.csv")
+  # based on headers, already in knots this time
+
+storm_25yr_sim_3hr <- storm_25yr_sim_raw %>%
+  clean_names() %>%
+  mutate(year = year + 1,
+           #hours_base = timestep_3_hourly * 3,
+         hours_base = timestep_3_hourly * 3,
+           hour = hours_base %% 24,
+           day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(storm_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          sep = "-")
+           #wind = wind * 1.94384449 # converting to knots
+         ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+         
+         )) %>%
+  rename(
+    "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt"
+  ) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+
+# Can pull out specific storms based on name (the second 4-digit block lets you match by year/s as well)
+
+
+```
+
+
+
+
+# ~Methods (outlining for now)
+
+B) STORM Model Processing
+
+We used the `get_grid_winds` function (from the `stormwindmodel` package) to obtain per-storm maximum sustained wind speed per county (using population-weighted centers as in Anderson et al 2020); we performed some rearrangement and unit conversions for compatibility with this function. Most notably, years were arbitrarily assigned to the un-ordered simulated storm seasons, and times were assumed to be on-the-hour. We used FIPS codes to pair resulting county-level exposures with corresponding CDC mortality data and census shape files (for visualization).
+
+
+```{r}
+
+### Processing
+
+storm_25yr_sim_list_v2_3hr <- split(storm_25yr_sim_3hr,
+                                f = storm_25yr_sim_3hr$storm_id)
+
+# Setting up parameters for parallel run:
+  # Realized I need to comment out to make it practical to run/render
+
+ #start <- proc.time()
+ #cl <- makeCluster(6) # 8 for ~full utilization
+ #storm_winds_25yr_grid_3hr <- parLapply(cl,
+#                                   (storm_25yr_sim_list_v2_3hr),
+ #                                  get_grid_winds)
+ #stopCluster(cl)
+ #end <- proc.time()
+ #print(end - start) 
+
+  # Loading saved output (Exported as .rda separately) 
+
+load(file = "../03_output/storm_winds_25yr_grid_3hr.rda")
+
+
+## Rearranging from split format back to standard dataframe
+
+
+storm_winds_25yr3h_grid_comb <- do.call("rbind", storm_winds_25yr_grid_3hr)
+
+storm_winds_25yr3h_grid_comb <- storm_winds_25yr3h_grid_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+# Example plots: 
+
+
+# Mean winds
+storm_winds_25yr3h_grid_comb %>%
+  group_by(gridid) %>%
+  summarize(mean_windspeed = mean(vmax_sust)) %>%
+  left_join(us_counties, by = c("gridid" = 'GEOID')) %>%
+  ggplot() +
+  aes(fill = mean_windspeed, geometry = geometry) +
+  geom_sf() +
+  theme_minimal() + 
+  scale_fill_viridis_c(option = 'magma') +
+  labs(fill = "Windspeed (m/s)",
+       title = "Mean Sustained Windspeed (m/s) in 25y Simulation")
+
+# max winds [useful?]
+
+storm_winds_25yr3h_grid_comb %>%
+  group_by(gridid) %>%
+  summarize(mean_windspeed = max(vmax_sust)) %>%
+  left_join(us_counties, by = c("gridid" = 'GEOID')) %>%
+  ggplot() +
+  aes(fill = mean_windspeed, geometry = geometry) +
+  geom_sf() +
+  theme_minimal() +
+  scale_fill_viridis_c(option = 'magma') + 
+  labs(fill = "Windspeed (m/s)",
+       title = "Maximum Sustained Windspeed (m/s) in 25y Simulation")
+
+```
+
+
+# C) Exposure Response Prediction Function
+
+[*In practice, probably supplemental material if at all*]
+
+[temporarily reconstructing Dr. Nethery's model using 4-knot spline polynomial regression]
+
+We made a function to predict exposure-adjusted all-cause mortality on a per-county basis, using the STORM model-derived wind exposures, and baseline mortality rates and populations from the CDC data. By default, we included all recorded wind speeds in the calculation, but left the upper and lower thresholds user-adjustable. The function returned a list of storm events, with county (by FIPS), population, maximum sustained wind speed,  baseline mortality, exposure-transformed mortality, and the projected difference in mortality. 
+
+
+```{r}
+
+
+wind_mort_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4), data = wind_mort_data)
+# Just using AIC; 4 is markedly better than 3 (~164k vs ~136k)
+# And increases again @ 5 knots -- 4 seems to be optimal
+# Adding CIs manually as separate models:
+
+wind_mort_fn_ns_ci_low <- glm(lower_95ci ~ ns(windspeed, 4), data = wind_mort_data)
+wind_mort_fn_ns_ci_high <- glm(upper_95ci ~ ns(windspeed, 4), data = wind_mort_data)
+
+
+# `fips` here is a vector of FIPS (*as characters*)
+county_mortality_pred <- function(fips = counties_mort_65$`County Code`,
+                                  storm_data = storm_winds,
+                                  pred_model = wind_mort_fn_ns,
+                                  counties = counties_mort_65,
+                                  #windspeed_min = min(pred_model$data$windspeed),
+                                  #windspeed_max = max(pred_model$data$windspeed),
+                                  windspeed_min = 0,
+                                  windspeed_max = Inf,
+                                  storm_ids = ".*") {
+  #wind_mort_long_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4), 
+  #                            data = wind_mort_data_long)
+
+  estimates <- counties %>%
+    clean_names() %>%
+    filter(county_code %in% fips) %>%
+    inner_join(
+    storm_data %>%
+    filter(vmax_sust > windspeed_min &
+           vmax_sust <= windspeed_max) %>%
+    filter(str_detect(storm_id, storm_ids)) %>% 
+    mutate(storm_year = as.numeric(
+      str_extract(storm_id, "[0-9]{4}"))) %>%
+    mutate(storm_years = length(unique(storm_year))),
+      mutate(
+        storm_years = max(storm_year - min(storm_year)) + 1
+      ),
+  by = c("county_code" = "fips")
+    )
+  
+  if(nrow(estimates > 0)){
+    estimates <- estimates %>%
+    mutate(est_excess_death_rate = predict(pred_model,
+                                           newdata = data.frame( windspeed = vmax_sust)),
+           est_excess_deaths = (est_excess_death_rate *
+             population) / 100000)
+  return(estimates %>%
+           select(county_code, state, county, vmax_sust, storm_id, storm_year, est_excess_death_rate, est_excess_deaths, population, deaths, crude_rate, storm_years))
+  }
+
+  else{
+    return("No data meeting parameters")
+  }
+    
+}
+
+
+# Example of integrating with STORM data:
+
+  # note: no filtering on wind speeds, so fairly low
+
+scenario_sim <- county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      storm_data = (storm_winds_25yr3h_grid_comb %>%
+                                        rename(fips = 'gridid')),
+                      wind_mort_fn_ns) %>%
+    mutate(est_excess_deaths_annual = purrr::map2( .x = est_excess_deaths,
+                                                   .y = storm_years,
+                                                   .f = ~ (sum(.x) / .y))
+    ) %>%
+  unnest(cols = est_excess_deaths_annual)
+
+
+scenario_sim %>%
+  group_by(county_code) %>%
+  summarize(est_excess_deaths_annual_total = sum(est_excess_deaths_annual)) %>%
+  left_join(us_counties, 
+            by = c("county_code" = "GEOID")) %>%
+  ggplot() +
+  aes(
+    fill = est_excess_deaths_annual_total,
+    geometry = geometry
+  ) +
+  scale_fill_viridis_c() +
+  geom_sf() +
+  theme_void()
+  
+
+```
+
+
+
+## Intergrating new scenarios
+  (not evaluating this block to make feasible runtime)
+  
+```{r eval = FALSE}
+
+storm_sim_col_names <- c('Year',	'Month',	'Storm number',	'Timestep (3-hourly)',	'Lat',	'Lon',	'Max wind (kt)','Min Pres (hPa)')
+
+amo_all_250 <- read_csv("../01_data/All_250_years.csv", col_names = FALSE)
+
+colnames(amo_all_250) <- storm_sim_col_names
+  
+
+amo_pos_250 <- read_csv("../01_data/Pos_250_years.csv", col_names = FALSE)
+
+colnames(amo_pos_250) <- storm_sim_col_names
+
+amo_neg_250 <- read_csv("../01_data/Neg_250_years.csv", col_names = FALSE)
+
+colnames(amo_neg_250) <- storm_sim_col_names
+
+
+## Cleaning up input data
+
+amo_all_250_clean <- amo_all_250 %>%
+  clean_names() %>%
+  mutate(year = year + 1,
+           #hours_base = timestep_3_hourly * 3,
+         hours_base = timestep_3_hourly * 3,
+           hour = hours_base %% 24,
+           day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(storm_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          sep = "-")
+           #wind = wind * 1.94384449 # converting to knots
+         ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+         
+         )) %>%
+  rename(
+    "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt"
+  ) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+
+
+amo_pos_250_clean <- amo_pos_250 %>%
+  clean_names() %>%
+  mutate(year = year + 1,
+           #hours_base = timestep_3_hourly * 3,
+         hours_base = timestep_3_hourly * 3,
+           hour = hours_base %% 24,
+           day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(storm_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          sep = "-")
+           #wind = wind * 1.94384449 # converting to knots
+         ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+         
+         )) %>%
+  rename(
+    "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt"
+  ) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+
+
+amo_neg_250_clean <- amo_neg_250 %>%
+  clean_names() %>%
+  mutate(year = year + 1,
+           #hours_base = timestep_3_hourly * 3,
+         hours_base = timestep_3_hourly * 3,
+           hour = hours_base %% 24,
+           day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(storm_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          sep = "-")
+           #wind = wind * 1.94384449 # converting to knots
+         ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+         
+         )) %>%
+  rename(
+    "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt"
+  ) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+
+## Running subsets in parallel:
+
+# Setting up parameters for parallel run:
+  # Realized I need to comment out to make it practical to run/render
+
+# Processing for setup:
+
+amo_pos_250_clean_split <- split(amo_pos_250_clean,
+                                f = amo_pos_250_clean$storm_id)
+
+
+amo_neg_250_clean_split <- split(amo_neg_250_clean,
+                                f = amo_neg_250_clean$storm_id)
+
+
+amo_all_250_clean_split <- split(amo_all_250_clean,
+                                f = amo_all_250_clean$storm_id)
+
+
+
+  # positive
+ start <- proc.time()
+ cl <- makeCluster(7) # 8 for ~full utilization
+ amo_pos_250_clean_get_grid_5yr <- parLapply(cl,
+                                    amo_pos_250_clean_split[1:100],
+                                   get_grid_winds)
+ stopCluster(cl)
+ end <- proc.time()
+ print(end - start) 
+ 
+ # negative
+start <- proc.time()
+ cl <- makeCluster(7) # 8 for ~full utilization
+ amo_neg_250_clean_get_grid_5yr <- parLapply(cl,
+                                    amo_neg_250_clean_split[1:100],
+                                   get_grid_winds)
+ stopCluster(cl)
+ end <- proc.time()
+ print(end - start) 
+
+  #all
+start <- proc.time()
+ cl <- makeCluster(7) # 8 for ~full utilization
+ amo_all_250_clean_get_grid_5yr <- parLapply(cl,
+                                    amo_all_250_clean_split[1:100],
+                                   get_grid_winds)
+ stopCluster(cl)
+ end <- proc.time()
+ print(end - start) 
+ 
+  # Loading saved output (Exported as .rda separately) 
+
+ ## combining
+ 
+amo_all_250_clean_get_grid_5yr_comb <- do.call("rbind", amo_all_250_clean_get_grid_5yr)
+
+amo_all_250_clean_get_grid_5yr_comb <- amo_all_250_clean_get_grid_5yr_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+
+amo_pos_250_clean_get_grid_5yr_comb <- do.call("rbind", amo_pos_250_clean_get_grid_5yr)
+
+amo_pos_250_clean_get_grid_5yr_comb <- amo_pos_250_clean_get_grid_5yr_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+
+amo_neg_250_clean_get_grid_5yr_comb <- do.call("rbind", amo_neg_250_clean_get_grid_5yr)
+
+amo_neg_250_clean_get_grid_5yr_comb <- amo_neg_250_clean_get_grid_5yr_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+# Exporting:
+
+save(amo_all_250_clean_get_grid_5yr_comb, file = "../01_data/amo_all_250_clean_get_grid_5yr_comb.rda")
+save(amo_pos_250_clean_get_grid_5yr_comb, file = "../01_data/amo_pos_250_clean_get_grid_5yr_comb.rda")
+save(amo_neg_250_clean_get_grid_5yr_comb, file = "../01_data/amo_neg_250_clean_get_grid_5yr_comb.rda")
+
+``` 
+
+# Plotting test samples from 250-year data (just first 100 storms -- realized they're all the first storm of the year; should rerun with random sampling if/while SUMMIT isn't working)
+  # not infeasible; would take ~30hr to run everything
+  
+# Prelimianry step: loading exported data  
+```{r}
+
+load("../01_data/amo_all_250_clean_get_grid_5yr_comb.rda")
+load("../01_data/amo_pos_250_clean_get_grid_5yr_comb.rda")
+load("../01_data/amo_neg_250_clean_get_grid_5yr_comb.rda")
+
+# Now loading full data
+  # Argh--misread and downloaded original inputs instead; runs actually failed
+
+#synth_all_250_yr <- read_csv("../01_data/All_250_years.csv")
+#synth_pos_250_yr <- read_csv("../01_data/Pos_250_years.csv")
+#synth_neg_250_yr <- read_csv("../01_data/Neg_250_years.csv")
+
+```
+
+```{r}
+# Plots
+
+
+# Storm maximum and median wind speeds:
+
+
+amo_all_250_clean_get_grid_5yr_comb %>%
+    mutate(scenario = "All") %>%
+    full_join(
+        amo_pos_250_clean_get_grid_5yr_comb %>%
+            mutate(scenario = "Positive")) %>%
+    full_join(
+        amo_neg_250_clean_get_grid_5yr_comb %>%
+            mutate(scenario = "Negative")) %>%
+    group_by(gridid, scenario) %>%
+    summarize(mean_windspeed = mean(vmax_sust)) %>%
+    full_join(us_counties, by = c("gridid" = 'GEOID')) %>%
+  filter(!is.na(scenario)) %>%
+    ggplot() +
+    aes(fill = mean_windspeed, geometry = geometry) +
+    geom_sf(color = NA) +
+    theme_minimal() +
+    scale_fill_viridis_c(option = 'magma') + 
+    labs(fill = "Mean M.S. Windspeed (m/s)",
+         title = "Mean Maximum Sustained Windspeeds (m/s) in 100 Synthetic Storms",
+         subtitle = "By Scenario (AMO Negative, Positive, All Storms") +
+    facet_grid(. ~ scenario)
+
+amo_all_250_clean_get_grid_5yr_comb %>%
+    mutate(scenario = "All") %>%
+    full_join(
+        amo_pos_250_clean_get_grid_5yr_comb %>%
+            mutate(scenario = "Positive")) %>%
+    full_join(
+        amo_neg_250_clean_get_grid_5yr_comb %>%
+            mutate(scenario = "Negative")) %>%
+    group_by(gridid, scenario) %>%
+    summarize(max_windspeed = max(vmax_sust)) %>%
+    full_join(us_counties, by = c("gridid" = 'GEOID')) %>%
+  filter(!is.na(scenario)) %>%
+    ggplot() +
+    aes(fill = max_windspeed, geometry = geometry) +
+    geom_sf(color = NA) +
+    theme_minimal() +
+    scale_fill_viridis_c(option = 'magma') + 
+    labs(fill = "Maximum M.S. Windspeed (m/s)",
+         title = "Maximum Sustained Windspeed (m/s) in 100 Synthetic Storms") +
+    facet_grid(. ~ scenario)
+
+
+
+
+## Facetted storm events:
+
+
+
+  #all
+
+
+scenario_amo_all_250 <- county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      storm_data = (amo_all_250_clean_get_grid_5yr_comb %>%
+                                        rename(fips = 'gridid')),
+                      wind_mort_fn_ns) %>%
+    mutate(est_excess_deaths_annual = purrr::map2( .x = est_excess_deaths,
+                                                   .y = storm_years,
+                                                   .f = ~ (sum(.x) / .y))
+    ) %>%
+  unnest(cols = est_excess_deaths_annual)
+
+
+scenario_amo_all_250 %>%
+  group_by(county_code) %>%
+  summarize(est_excess_deaths_annual_total = sum(est_excess_deaths_annual)) %>%
+  left_join(us_counties, 
+            by = c("county_code" = "GEOID")) %>%
+  ggplot() +
+  aes(
+    fill = est_excess_deaths_annual_total,
+    geometry = geometry
+  ) +
+  scale_fill_viridis_c() +
+  geom_sf() +
+  theme_void()
+
+
+  #pos
+
+
+scenario_amo_pos_250 <- county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      storm_data = (amo_pos_250_clean_get_grid_5yr_comb %>%
+                                        rename(fips = 'gridid')),
+                      wind_mort_fn_ns) %>%
+    mutate(est_excess_deaths_annual = purrr::map2( .x = est_excess_deaths,
+                                                   .y = storm_years,
+                                                   .f = ~ (sum(.x) / .y))
+    ) %>%
+  unnest(cols = est_excess_deaths_annual)
+
+
+scenario_amo_pos_250 %>%
+  group_by(county_code) %>%
+  summarize(est_excess_deaths_annual_total = sum(est_excess_deaths_annual)) %>%
+  left_join(us_counties, 
+            by = c("county_code" = "GEOID")) %>%
+  ggplot() +
+  aes(
+    fill = est_excess_deaths_annual_total,
+    geometry = geometry
+  ) +
+  scale_fill_viridis_c() +
+  geom_sf() +
+  theme_void()
+
+  #neg
+  
+scenario_amo_neg_250 <- county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      storm_data = (amo_neg_250_clean_get_grid_5yr_comb %>%
+                                        rename(fips = 'gridid')),
+                      wind_mort_fn_ns) %>%
+    mutate(est_excess_deaths_annual = purrr::map2( .x = est_excess_deaths,
+                                                   .y = storm_years,
+                                                   .f = ~ (sum(.x) / .y))
+    ) %>%
+  unnest(cols = est_excess_deaths_annual)
+
+
+scenario_amo_neg_250 %>%
+  group_by(county_code) %>%
+  summarize(est_excess_deaths_annual_total = sum(est_excess_deaths_annual)) %>%
+  left_join(us_counties, 
+            by = c("county_code" = "GEOID")) %>%
+  ggplot() +
+  aes(
+    fill = est_excess_deaths_annual_total,
+    geometry = geometry
+  ) +
+  scale_fill_viridis_c() +
+  geom_sf() +
+  theme_void()
+
+
+## Visualization as discussed:
+
+  # vmax_sust intervals (knots): <= 34, 34-48, 48-64, >64
+  # 1 m/s = 1.94384449 knots
+
+# combined visualization:
+
+ 
+####
+
+scenario_amo_all_250 %>%
+    mutate(scenario = "All") %>%
+    full_join(
+        scenario_amo_pos_250 %>%
+            mutate(scenario = "Positive")) %>%
+    full_join(
+        scenario_amo_neg_250 %>%
+            mutate(scenario = "Negative")) %>%
+    mutate(vmax_sust_interval = case_when(
+        vmax_sust < 34/1.94384449 ~ "<34",
+        vmax_sust > 34/1.94384449 & vmax_sust <= 48/1.94384449 ~ "34-48",
+        vmax_sust > 48/1.94384449 & vmax_sust <= 64/1.94384449 ~ "48-64",
+        vmax_sust > 64/1.94384449 ~ ">64"
+    ),
+    max_sust_interval = ordered(vmax_sust_interval,
+         levels = c("<34", "34-48", "48-64", ">64"))) %>%
+    group_by(county, county_code, vmax_sust_interval, scenario) %>%
+    summarize(storm_count = n())  %>%
+    rename(gridid = county_code) %>%
+    group_by(gridid) %>%
+    left_join(us_counties, by = c("gridid" = 'GEOID')) %>%
+    ggplot() +
+    aes(fill = storm_count,
+        geometry = geometry) +
+    geom_sf(color = NA) +
+    theme_minimal() + 
+    scale_fill_viridis_c(option = 'magma') +
+    labs(fill = "Tropical Cyclone Count)",
+         title = "TC Count by Climate Scenario and Sustained Speed") +
+  facet_grid(scenario ~ vmax_sust_interval) +
+  theme_void() +
+  scale_fill_viridis_c() +
+  geom_sf(data = (us_counties %>%
+                    filter(GEOID %in% amo_all_250_clean_get_grid_5yr_comb$gridid)),
+          color = "grey", fill = NA)
+
+```

@@ -1,0 +1,433 @@
+---
+title: "exposure_testing"
+author: "Daniel Dean"
+date: "6/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+library(stormwindmodel)
+
+
+```
+
+# Setup (run `final_processing` first)
+
+
+```{r}
+
+#### input data (for summit)
+
+
+
+
+
+
+
+storm_sim_col_names <- c('Year',        'Month',        'Storm number', 'Timestep (3-hourly)',  'Lat',  'Lon',  'Max wind (kt)','Min Pres (hPa)')
+
+
+#Negative
+
+#amo_neg_250 <- read_csv("Neg_250_years.csv", col_names = FALSE)
+amo_neg_250 <- read_csv("../../tc_exposure/Synthetic_data/Neg_250_years_CONUS.csv", col_names = FALSE)
+
+colnames(amo_neg_250) <- storm_sim_col_names
+
+
+# cleaning format
+
+
+amo_neg_250_clean <- amo_neg_250 %>%
+	#filter(Year <= 20) %>% # why was I filtering year here?
+  clean_names() %>%
+  mutate(year = year + 1,
+         storm_id = paste(storm_number,str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),sep = "-"),
+       date = ( (lubridate::as_datetime(
+         paste0(
+         "1", str_pad(year, width = 3, side = 'left', pad = 0),
+         "-",
+         str_pad(month, width = 2, side = 'left', pad = 0),
+         "-01"
+         )
+         )) + lubridate::hours(timestep_3_hourly * 3))
+         ) %>%
+mutate(date = as.character(date), 
+date = str_sub(date, start = 0, end = 16) ) %>%
+  rename( "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt") %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+##
+## Removing storms with less than 3 events recorded (~70)
+
+amo_neg_250_clean <- amo_neg_250_clean %>%
+  group_by(storm_id) %>%
+  nest() %>%
+  mutate(length_events = purrr::map(.x = data, .f = ~nrow(.x))) %>%
+  unnest(length_events) %>%
+  arrange(desc(length_events)) %>%
+  unnest(data) %>%
+  filter(length_events > 1) %>% 
+  select(-length_events)
+
+# Positive
+
+
+#amo_pos_250 <- read_csv("pos_250_years.csv", col_names = FALSE)
+amo_pos_250 <- read_csv("../../tc_exposure/Synthetic_data/pos_250_years_CONUS.csv", col_names = FALSE)
+
+colnames(amo_pos_250) <- storm_sim_col_names
+
+
+# cleaning format
+
+
+amo_pos_250_clean <- amo_pos_250 %>%
+	#filter(Year <= 20) %>% # why was I filtering year here?
+  clean_names() %>%
+  mutate(year = year + 1,
+         storm_id = paste(storm_number,str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),sep = "-"),
+       date = ( (lubridate::as_datetime(
+         paste0(
+         "1", str_pad(year, width = 3, side = 'left', pad = 0),
+         "-",
+         str_pad(month, width = 2, side = 'left', pad = 0),
+         "-01"
+         )
+         )) + lubridate::hours(timestep_3_hourly * 3))
+         ) %>%
+mutate(date = as.character(date), 
+date = str_sub(date, start = 0, end = 16) ) %>%
+  rename( "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt") %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+##
+## Removing storms with less than 3 events recorded (~70)
+
+amo_pos_250_clean <- amo_pos_250_clean %>%
+  group_by(storm_id) %>%
+  nest() %>%
+  mutate(length_events = purrr::map(.x = data, .f = ~nrow(.x))) %>%
+  unnest(length_events) %>%
+  arrange(desc(length_events)) %>%
+  unnest(data) %>%
+  filter(length_events > 1) %>% 
+  select(-length_events)
+
+
+
+#All
+
+#amo_all_250 <- read_csv("all_250_years.csv", col_names = FALSE)
+amo_all_250 <- read_csv("../../tc_exposure/Synthetic_data/all_250_years_CONUS.csv", col_names = FALSE)
+
+colnames(amo_all_250) <- storm_sim_col_names
+
+
+# cleaning format
+
+
+amo_all_250_clean <- amo_all_250 %>%
+	#filter(Year <= 20) %>% # why was I filtering year here?
+  clean_names() %>%
+  mutate(year = year + 1,
+         storm_id = paste(storm_number,str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),sep = "-"),
+       date = ( (lubridate::as_datetime(
+         paste0(
+         "1", str_pad(year, width = 3, side = 'left', pad = 0),
+         "-",
+         str_pad(month, width = 2, side = 'left', pad = 0),
+         "-01"
+         )
+         )) + lubridate::hours(timestep_3_hourly * 3))
+         ) %>%
+mutate(date = as.character(date), 
+date = str_sub(date, start = 0, end = 16) ) %>%
+  rename( "latitude" = "lat",
+    "longitude" = "lon",
+    "wind" = "max_wind_kt") %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+##
+## Removing storms with less than 3 events recorded (~70)
+
+amo_all_250_clean <- amo_all_250_clean %>%
+  group_by(storm_id) %>%
+  nest() %>%
+  mutate(length_events = purrr::map(.x = data, .f = ~nrow(.x))) %>%
+  unnest(length_events) %>%
+  arrange(desc(length_events)) %>%
+  unnest(data) %>%
+  filter(length_events > 1) %>% 
+  select(-length_events)
+
+
+#######
+
+
+load("../01_data/amo_all_250_clean_get_grid_alt_date_CONUS.rda")
+load("../01_data/amo_neg_250_clean_get_grid_alt_date_CONUS.rda")
+load("../01_data/amo_pos_250_clean_get_grid_alt_date_CONUS.rda")
+
+# corresponds to amo_<>_250_clean_get_grid, I think
+
+head(amo_all_250_clean_get_grid)
+
+# copying in last few lines of code after crash (should be fixed now, but seemed easier to rerun here)
+
+# all
+
+
+
+amo_all_250_clean_get_grid_TEST_comb <- do.call("rbind", amo_all_250_clean_get_grid)
+
+amo_all_250_clean_get_grid_TEST_comb <- amo_all_250_clean_get_grid_TEST_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+
+# negative  
+amo_neg_250_clean_get_grid_TEST_comb <- do.call("rbind", amo_neg_250_clean_get_grid)
+
+amo_neg_250_clean_get_grid_TEST_comb <- amo_neg_250_clean_get_grid_TEST_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+
+# positive 
+amo_pos_250_clean_get_grid_TEST_comb <- do.call("rbind", amo_pos_250_clean_get_grid)
+
+amo_pos_250_clean_get_grid_TEST_comb <- amo_pos_250_clean_get_grid_TEST_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id,
+                                "[0-9]-[0-9]*"))
+
+# Merging (not positive this is the most efficient approach; should be able to iterate otherwhise)
+
+amo_merged_250_clean_get_grid <- (amo_pos_250_clean_get_grid_TEST_comb %>% mutate(scenario = "positive")) %>%
+  full_join((amo_neg_250_clean_get_grid_TEST_comb %>% mutate(scenario = "negative"))) %>%
+  full_join((amo_all_250_clean_get_grid_TEST_comb %>% mutate(scenario = "all"))) %>%
+  group_by(storm_id, gridid) %>%
+  filter(vmax_sust == max(vmax_sust)) %>% 
+  arrange(storm_id, gridid)
+
+  ## Not positive why some storms generate 2 impacts; needs more investigation/attention (e.g. would addition be the more appropriate response?)
+
+
+## Adding more-precise chronological data
+
+
+```
+
+
+# Exposures
+
+Max wind speed in the county over the whole period
+
+```{r}
+
+amo_merged_250_clean_get_grid_max_wind <- amo_merged_250_clean_get_grid %>%
+  group_by(gridid, scenario) %>%
+  summarize(max_wind_sust_alltime = max(vmax_sust),
+            max_wind_gust_alltime = max(vmax_gust))
+  
+```
+
+# Quick Example/Test Plot
+```{r}
+amo_merged_250_clean_get_grid_max_wind %>%
+  left_join(us_counties, by = c("gridid" = "GEOID")) %>%
+  ggplot() +
+  aes(geometry = geometry,
+      fill = max_wind_sust_alltime) +
+  geom_sf() +
+  facet_wrap(. ~ scenario) +
+  theme_void()
+```
+
+Count of >= 17.5 m/s (34 knots; tropical storm-force) wind speed exposure at each county center
+Count of >= 25.7 m/s (50 knots; tropical storm-force) wind speed exposure at each county center
+Count of >= 32.9 m/s (64 knots; tropical storm-force) wind speed exposure at each county center
+Count of >= 49.4 m/s (96 knots; tropical storm-force) wind speed exposure at each county center
+
+
+
+
+```{r}
+
+amo_merged_250_clean_get_grid_windspeed_counts <- amo_merged_250_clean_get_grid %>%
+  mutate(
+    over_17.5 = vmax_sust >= 17.5,
+    over_25.7 = vmax_sust >= 25.7,
+    over_32.9 = vmax_sust >= 32.9,
+    over_49.4 = vmax_sust >= 49.4
+  ) %>%
+  group_by(gridid, scenario) %>%
+  summarize(
+    count_17.5 = sum(as.numeric(over_17.5)),
+    count_25.7 = sum(as.numeric(over_25.7)),
+    count_32.9 = sum(as.numeric(over_32.9)),
+    count_49.4 = sum(as.numeric(over_49.4))
+  ))
+  
+# plot
+
+amo_merged_250_clean_get_grid_windspeed_counts %>% pivot_longer(cols = c(count_17.5:count_49.4), names_to = "exposure", values_to = "count") %>% left_join(us_counties, by = c("gridid" = "GEOID")) %>%
+    ggplot() +
+    aes(geometry = geometry,
+        fill = count) +
+    geom_sf() +
+    facet_wrap(exposure ~ scenario) +
+    theme_void() + scale_fill_viridis_c()
+```
+
+Count of each type of exposure by county per decade/century (for each of the above thresholds)
+
+*Trying to think through how to do this procedurally; `get_grid_winds` drops explicit date information in output*
+
+  * also doesn't seem like specific adjacent groups of years have any relationship*
+```{r}
+
+year_count <- amo_merged_250_clean_get_grid  %>% mutate(year = str_extract_all(storm_id, "[0-9]{4}")) %>% select(year) %>% unique() %>% nrow()
+
+amo_merged_250_clean_get_grid_windspeed_counts_by_period <- amo_merged_250_clean_get_grid_windspeed_counts %>% pivot_longer(cols = c(count_17.5:count_49.4), names_to = "exposure", values_to = "count") %>%
+  mutate(count_decade = count / (year_count/10),
+         count_century = count / (year_count/100)
+         )
+
+```
+
+
+
+Population-events exposed at or above each wind speed threshold per year (For each county, multiply county pop by the number of times that county experiences wind speeds at or above each threshold. Then, sum the values across all counties. This produces a value for the entire US and for each region for each wind speed threshold.)
+
+
+```{r}
+
+# using CDC_based pop data
+
+counties_mort_65 <- read_tsv("../01_data/all_cause_mortality_65_plus_county.txt")
+
+amo_merged_250_clean_get_grid_windspeed_counts_pop <- amo_merged_250_clean_get_grid_windspeed_counts %>% 
+  pivot_longer(
+  cols = c(count_17.5:count_49.4),  names_to = "exposure", values_to = "count") %>%
+left_join((counties_mort_65 %>% 
+             clean_names()),
+          by = c('gridid' = 'county_code')) %>%
+  mutate(pop_events = count * population,
+         pop_events_decade = (count * population) / (year_count / 10))
+
+
+```
+
+Population-events exposed at or above each wind speed threshold per decade (Calculated the same way as population-events [above] but average per decade; variation across years and decades can also be explored.)
+  *added as a column above; need to think through how to compare/evaluate variation*
+    -If nothing else, could use e.g. standard deviation (would modify upstream of this)
+
+
+
+**Total time exposure at or above each wind speed threshold at each county center (Sum all 15-minute periods in which each county center experiences winds speeds at or exceeding each threshold)**
+
+*need to think through this; `get_grid_wind` seems to aggregate TC events to the county level (with no explicit time consideration), so would need to somehow use the input data*
+
+Average and maximum exposure duration for each wind speed threshold in each county (For each county, use data from every exposure to compute that county's average and maximum exposure duration for each wind speed threshold across all storms that affected that county)
+
+*expanding on the above, it looks like `gust_durr` and `sust_durr` might get at this; uses a single threshold, however (20m/s by default), so unless I want to rerun 4x [honestly not infeasible], not currently ~accessible*
+
+Total minutes exposed (sum up duration above 20 m/s for each storm)
+
+*Oh, I can do this one!*
+
+```{r}
+
+amo_merged_250_clean_get_grid_total_exp_time <- amo_merged_250_clean_get_grid %>%
+  group_by(gridid, scenario) %>%
+  summarize(
+    gust_duration_20ms = sum(gust_dur),
+    sust_duration_20ms = sum(sust_dur)
+  ) 
+
+
+amo_merged_250_clean_get_grid_total_exp_time %>%
+  left_join(us_counties, by = c("gridid" = "GEOID")) %>%
+    ggplot() +
+    aes(geometry = geometry,
+        fill = sust_duration_20ms) +
+    geom_sf() +
+    facet_wrap(. ~ scenario) +
+    theme_void() + scale_fill_viridis_c()
+
+
+```
+
+Regional summaries and maps for all these
+
+*Still trying to think of best regions here*
+
+
+"Length" of season (months from first exposure to last in the year)
+*Should be able to use raw input data here (`get_grid_wind` aggregates to year level)*
+  *-could redo storm_ids to include original date*
+  
+```{r}
+
+## Adding more-precise chronological data
+  # need to include sceanarios b/c order is arbitrary by scenario
+
+  # cutting out storm paths for now (to avoid duplication), but this might allow plotting over exposure map with some modification
+  # Oh, also need to pull out *first* instance, not preserve exact date/times 
+
+amo_merged_250_clean <- (amo_pos_250_clean %>% mutate(scenario = "positive")) %>%
+  full_join((amo_neg_250_clean %>% mutate(scenario = "negative"))) %>%
+  full_join((amo_all_250_clean %>% mutate(scenario = "all")))
+
+
+amo_merged_250_clean_get_grid_months <- amo_merged_250_clean_get_grid %>%
+  left_join(
+   ( amo_merged_250_clean %>%
+      mutate(month = lubridate::month(date)) %>%
+      select(storm_id, month, scenario) %>%
+      unique()), by = c("storm_id", "scenario")
+  )
+
+
+# first exposure:
+
+amo_merged_250_clean_get_grid_months_summary <- amo_merged_250_clean_get_grid_months %>%
+  group_by(gridid, scenario) %>%
+  summarize(first_exp_month = min(month),
+            last_exp_month = max(month))
+  
+
+```
+  
+
+*Approach for these; we decided to use the "origin" month for storms* 
+
+Month of first exposure
+Month of last exposure
+Early season / late season activity through to exposure
+
+
+```{r}
+
+
+
+```

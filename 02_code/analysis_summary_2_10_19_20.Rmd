@@ -1,0 +1,331 @@
+---
+title: "Hurricane HIA 2"
+author: "Daniel Dean"
+date: "11/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(janitor)
+library(tigris)
+library(hurricaneexposuredata)
+library(knitr)
+library(DT)
+```
+
+## Updates/Goals (10/19/20):
+
+- Stick with a yearly resolution for now
+
+- Should be able to pre-filter by ICD codes and ~aggregate upstream, so data volume shouldn't be an issue (*ALSO*, only need one year of data). The data table should still be relevant here.
+
+- Correction on exposures: they are actually hierarchical (e.g. >21m/s is a subset of >12m/s). The consensus is that we should stick with just 21 m/s for the time being (to give a more intuitive, conservative, estimate). Longer-term, we should consider rerunning the underlying model to give discrete exposure intervals; also chance to address ages, other demographics.
+
+- Biggest change: use the `tigris` pacakge to start plotting exposures, mortality, etc., spatially. 
+
+## Visual Overview of process (1st draft)
+
+
+![First pass on a visual overview](cira_conceptual_diagram_v1.png)
+
+
+## Importing Data
+
+> 1) For storm exposure data, using the `storm_winds` dataset from the `hurricaneexposuredata` package.
+
+> 2) For an example of monthly mortality data, importing 2016-2018 FL and GA mortality figures from CDC Wonder (still working on API process; using a locally-saved copy for now).
+
+```{r}
+#still trying to work out API; in theory should be able to obtain XMLs using `view source`, but it points me to an ~access denied page.
+
+#Can export query-specific URLs (e.g. https://wonder.cdc.gov/controller/saved/D76/D93F306 for Louisiana data from 2018, all-causes, grouped by ICD chapter and subchapter), but so far can't figure out if I can use that to get XMLs
+
+```
+  
+>> Locating the annual (2018) mortality figures on CDC has gone smoothly, and we have some latitude to add more detail if desired. As far as I could tell there werent any additional major ~subchapter changes between ICD9 and ICD10 for `External` and `Respiratory` deaths, but I'm not yet positive (could have overlooked the relevant information).
+
+>> As we discussed, I'm sticking with a 21m/s exposue for now to give more ~conservative estimates. 
+
+```{r echo = TRUE, message = FALSE, warning = FALSE}
+# libraries
+
+library(hurricaneexposuredata)
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+library(tigris)
+
+
+
+# 1) using `storm_winds` dataset:
+
+hurricaneexposuredata::storm_winds %>%
+  head()
+
+# 2) Now using annual-resolution 2018 data; restricted Circulatory deaths, but otherwise unchanged. 
+
+
+mortality_all_cause <- read_tsv("all_cause_mortality_2018.txt") %>% 
+  clean_names()
+
+mortality_cardio <- read_tsv("cardio_mortality_2018_minus_i80_i99.txt") %>% 
+  clean_names()
+
+mortality_respiratory <- read_tsv("respiratory_mortality_2018.txt") %>% 
+  clean_names()
+
+mortality_external <- read_tsv("external_mortality_2018.txt") %>% 
+  clean_names()
+
+  # ~philosophically, this includes categories like homicide, suicide, police/military-linked deaths, medical complications, etc., in addition to accidents strictly speaking. 
+
+#example:
+
+mortality_cardio %>% head()
+
+
+# Manually pulling in RRs from NEJM paper:
+  # order is 12, 15, 18, 21 m/s; using last for now:
+
+all_cause_rr <- c(1.03, 1.03, 1.05, 1.07)
+cardio_rr <- c(1.02, 1.03, 1.03, 1.03)
+respiratory_rr <- c(1.01, 0.99, 1.02, 1.05)
+external_rr <- c(1.34, 1.54, 1.81, 2.42)
+
+
+
+# Merging all types (seeing if this makes for less redundancy downstream)
+  # can take advantage of only using 21 m/s for now, but need to think about how best to accomodate multiple RRS--maybe include the entire vector and call e.g. .$rr[4] when needed?
+    # Worst case could use a `case_when` block; a bit awkward but definitely workable
+
+mortality_merged <- mortality_all_cause %>%
+  mutate(type = "all_cause",
+         rr = all_cause_rr[[4]]) %>%
+  full_join(mortality_cardio %>%
+              mutate(type = "cardio",
+                     rr = cardio_rr[[4]])) %>%
+  full_join(mortality_respiratory %>%
+              mutate(type = "respiratory",
+                     rr = respiratory_rr[[4]])) %>%
+  full_join(mortality_external %>%
+              mutate(type = "external",
+                     rr = external_rr[[4]])) %>%
+  mutate(death_rate_daily = deaths / population / 365) # NOTE: 1 year only
+
+mortality_merged %>%
+  datatable()
+
+# bringing in storm data (could get pretty large! <-- yeah, ~1.5mn unfiltered; however, pre-filtering to >=21 m/s drops it to <10k!)
+  # using `right join` to limit only to data with >=21m/s exposure(s)
+
+  # 1988-2018, so 20 years
+
+mortality_merged_wind_21ms <- mortality_merged %>%
+  right_join((storm_winds %>%
+                filter(vmax_sust >= 21) %>%
+                group_by(fips) %>%
+                nest() %>%
+                mutate(events_yr = purrr::map(.x = data,
+                                              .f = ~nrow(.x))) %>%
+                unnest(cols = c(data, events_yr)) %>%
+                mutate(event_days_yr = events_yr * 10)
+              ),
+             by = c('county_code' = 'fips')) %>%
+  mutate(event_deaths_yr_est = event_days_yr *
+           death_rate_daily * rr * population,
+         event_deaths_yr_base = event_days_yr *
+           death_rate_daily * population,
+         event_deaths_yr_diff = event_deaths_yr_est - event_deaths_yr_base)
+
+
+mortality_merged_wind_21ms <- mortality_merged_wind_21ms %>%
+  filter(!is.na(county_code)) 
+
+
+## Not sure what's going on here: two counties (48261, 48311) are apparently present in the storm data, but missing from CDC data--no deaths of any kind? <-- Both are very small counties is TX, so plausible; also would fall well blow the 400k threshold in any case
+    # 48311 = McMullen, TX (2010 census pop = 707)
+    # 48261 = Kenedy county, TX; population was 416 in 2010 census
+
+mortality_merged_wind_21ms %>%
+  datatable()
+
+#  Elevated deaths seem plausible...
+```
+
+
+# Importing tigirs county shapefiles
+
+`us_counties <- tigris::counties(cb = TRUE) # using lower-res versions`
+
+```{r include = FALSE}
+us_counties <- tigris::counties(cb = TRUE) # using lower-res versions
+
+```
+
+```{r message = FALSE, warning = FALSE}
+# Bringing in Tigris plots--US census website is finally up again!
+
+us_counties <- tigris::counties(cb = TRUE) # using lower-res versions
+
+mortality_merged_wind_21ms_geom <- mortality_merged_wind_21ms %>% left_join((us_counties %>% clean_names %>% mutate(county_code = paste0(statefp, countyfp))))
+
+
+```
+
+# Summary plot of populations
+
+*Incidentally, for some reason I'm having a hard time getting not-small plots with the maps*
+
+```{r }
+# Quick plot of included counties (not filtering by population yet):
+
+ggplot() +
+  aes(fill = mortality_merged_wind_21ms_geom$population,
+      color = (mortality_merged_wind_21ms_geom$population > 400000)) +
+  geom_sf(data = mortality_merged_wind_21ms_geom$geometry) +
+  theme_classic() +
+  scale_fill_viridis_c() +
+  scale_color_manual(values = c("transparent", "red")) +
+  labs(
+    color = "Population >= 400k?",
+    fill = "County Population (CDC)",
+    title = "Populations in Counties with >21 m/s Exposure"
+    
+  )
+
+###
+```
+
+# Total projected deaths during average annual storm events 
+
+```{r fig.height = 12}
+mortality_merged_wind_21ms_geom %>%
+  filter(!is.na(type)) %>%
+ggplot() +
+  aes(fill = (event_deaths_yr_est),
+      color = (population > 400000),
+      geometry = geometry) +
+  geom_sf() +
+  theme_classic() +
+  #scale_fill_gradient2(low = 'white', mid = 'gold', high = 'red') +
+  scale_fill_viridis_c() +
+  scale_color_manual(values = c("transparent", "red")) +
+  facet_wrap(~type) +
+  labs(
+    color = "Population >= 400k?",
+    fill = "Estimated Deaths (Total)",
+    title = "Estimated Deaths During >= 21m/s Storm Events"
+    
+  )
+
+# OK, this should actually cover everything!
+
+mortality_merged_wind_21ms_geom %>%
+  filter(!is.na(type)) %>%
+ggplot() +
+  aes(fill = (event_deaths_yr_diff),
+      color = (population > 400000),
+      geometry = geometry) +
+  geom_sf() +
+  theme_classic() +
+  #scale_fill_gradient2(low = 'white', mid = 'gold', high = 'red') +
+  scale_fill_viridis_c() +
+  scale_color_manual(values = c("transparent", "red")) +
+  facet_wrap(~type) +
+  labs(
+    color = "Population >= 400k?",
+    fill = "Estimated Excess Deaths (over baseline)",
+    title = "Estimated Excess Deaths During >= 21m/s Storm Events"
+    
+  )
+
+  # Do faceted plots work here?
+
+```
+
+
+## Differences show up slightly more with a log scale
+
+
+```{r fig.height = 12}
+mortality_merged_wind_21ms_geom %>%
+  filter(!is.na(type)) %>%
+ggplot() +
+  aes(fill = log10(event_deaths_yr_est),
+      color = (population > 400000),
+      geometry = geometry) +
+  geom_sf() +
+  theme_classic() +
+  #scale_fill_gradient2(low = 'white', mid = 'gold', high = 'red') +
+  scale_fill_viridis_c() +
+  scale_color_manual(values = c("transparent", "red")) +
+  facet_wrap(~type) +
+  labs(
+    color = "Population >= 400k?",
+    fill = "Estimated Total Deaths (log 10)",
+    title = "Estimated Excess Deaths During >= 21m/s Storm Events"
+    
+  )
+
+# OK, this should actually cover everything!
+
+mortality_merged_wind_21ms_geom %>%
+  filter(!is.na(type)) %>%
+ggplot() +
+  aes(fill = log10(event_deaths_yr_diff),
+      color = (population > 400000),
+      geometry = geometry) +
+  geom_sf() +
+  theme_classic() +
+  #scale_fill_gradient2(low = 'white', mid = 'gold', high = 'red') +
+  scale_fill_viridis_c() +
+  scale_color_manual(values = c("transparent", "red")) +
+  facet_wrap(~type) +
+  labs(
+    color = "Population >= 400k?",
+    fill = "Estimated Excess Deaths (log10; over baseline)",
+    title = "Estimated Excess Deaths During >= 21m/s Storm Events"
+    
+  )
+
+  # Do faceted plots work here?
+
+```
+
+
+## Table for counties with $\ge$ 400k residents
+
+
+```{r}
+mortality_merged_wind_21ms_geom %>%
+  select(-c(vmax_gust:storm_id)) %>%
+  unique() %>%
+    filter(!is.na(type) & population >= 400000) %>%
+    group_by(county_code, county, type) %>% summarize(event_days_yr = sum(event_days_yr), event_deaths_yr_base = sum(event_deaths_yr_base), event_deaths_yr_est = sum(event_deaths_yr_est), event_deaths_yr_diff = sum(event_deaths_yr_diff)) %>%
+  datatable()
+
+# Totals by population group
+
+mortality_merged_wind_21ms_geom %>%
+   select(-c(vmax_gust:storm_id)) %>%
+  unique() %>%
+    filter(!is.na(type) & population >= 400000) %>%
+    #group_by(county_code, name, statefp, type) %>%
+  summarize(event_days_yr = sum(event_days_yr), event_deaths_yr_base = sum(event_deaths_yr_base), event_deaths_yr_est = sum(event_deaths_yr_est), event_deaths_yr_diff = sum(event_deaths_yr_diff)) %>%
+  datatable()
+
+
+mortality_merged_wind_21ms_geom %>%
+   select(-c(vmax_gust:storm_id)) %>%
+  unique() %>%
+    filter(!is.na(type) ) %>%
+    #group_by(county_code, name, statefp, type) %>%
+  summarize(event_days_yr = sum(event_days_yr), event_deaths_yr_base = sum(event_deaths_yr_base), event_deaths_yr_est = sum(event_deaths_yr_est), event_deaths_yr_diff = sum(event_deaths_yr_diff)) %>%
+  datatable()
+
+
+```

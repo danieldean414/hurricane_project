@@ -1,0 +1,392 @@
+---
+title: "hurricane_code_update_feb_21"
+author: "Daniel Dean"
+date: "2/10/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+
+```
+
+
+# Overview
+
+> The goal of this process is to consolidate previous steps, and work towards a modular function that accepts a FIPS code, reference storm data, and model for prediction, and outputs expected mortality figures (still working on minimal useful set)
+
+# External Data sources
+
+> 1) CDC Wonder data for county-level mortality (in this case using the latest data--2018+2019--and limited to the >65 population to match Medicare standard requirements).
+
+> 2) As a temporary measure, importing a csv of windspeed/mortality values from the Neterhy et al (2020) model; reconstituting as a 4-knot spline model, which seems fairly accurate. Ideally replace with a directly-calculated model
+
+> 3) Exposure data: Still using `storm_winds`, although getting close to using Alex' example synthetic tracks. (*I'm also exploring recalculating the historical tracks from the raw data as discussed to verify process.*)
+  > *Reminder to self: I want to double-check I'm interpreting the `tint` parameter correctly--I have it set to 3 hr to match the minimum resolution of Alex's model, but is this the right use of it?*
+
+> 4) As before, pulling in county shapefiles from the 2010 US Census via `tigris`
+
+> 3) Logistically, *can* pull in other external data (noteably coastal counties--although currently interpreting from a .pdf--and the ACS data based on FIPS) as needed for this or other models. 
+
+```{r}
+
+
+# making an equation, and later function, from Nethery et al data:
+
+####### Libraries
+
+library(tidyverse)
+library(tigris)
+library(tidycensus)
+  # I think this covers `sf`, etc. <- still should note specific packages
+library(ggplot2)
+library(janitor)
+library(splines)
+
+library(hurricaneexposuredata)
+  # Loading data for storm events and properties
+
+####################### Data
+
+wind_mort_data <- read_csv("exposure_response_death.csv")
+  ## Note: this only deals w/ events >= 17 m/s
+
+counties_mort_65 <- read_tsv("all_cause_mortality_65_plus_county.txt")
+  # From CDC Wonder with:
+    # Age set to 65 and above
+    # years 2018, 2019 (? <-- verify; last 2 available)
+      # suspect a wider range of years might be needed to counteract censoring <-- followup--seems OK so far
+    # No subsetting by age/sex/ethnicity/etc.
+    # all mortality
+    # * At this stage not separating by county pop. -- should consider downstream
+
+us_counties <- tigris::counties(cb = TRUE) # To avoid high-res versions
+
+
+# Test run for tidycensus:
+
+# Trying to see if it lets me work just by-FIPS
+
+test_22057 <- get_acs(geography = "county", variables = "B19013_001", county = "22057")
+
+  # Yep! Not sure what to pull in for model, but should integrate smoothly
+    # Trying to think of a good alternative to using the ACS classifier codes
+      # Maybe format the 'key` document to be more R-friendly and use string matching? 
+
+########################## Setting up function
+
+  # Not sure how to account for CIs in writing a model
+    # look up, but use central estimate for now....
+
+```
+
+> As mentioned, I'm using the external ~coordinates to reconstitute the Nethery et al. model for demonstration purposes:
+
+```{r}
+
+  # Predictive rather than explanatory in this case, so don't need to track ~precise relationship, I think...
+
+
+wind_mort_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4), data = wind_mort_data)
+  # Just using AIC; 4 is markedly better than 3 (~164k vs ~136k)
+    # And increases again @ 5 knots -- 4 seems to be optimal
+  # Adding CIs manually as separate models:
+
+wind_mort_fn_ns_ci_low <- glm(lower_95ci ~ ns(windspeed, 4), data = wind_mort_data)
+wind_mort_fn_ns_ci_high <- glm(upper_95ci ~ ns(windspeed, 4), data = wind_mort_data)
+
+```
+
+> I'm leaving out in some functional but ultimately unsuccesful attempts at recapturing uncertianty in the same model:
+
+```{r echo = FALSE}
+# Just had a thought--might be able to address CIs if I use est + u/l CI values?
+
+## Setting up alternative shape of model 
+  ######## <_This was an ultimately unsuccessful attempt to integrate uncertainty; going back to 3 separate models (central, upper, lower 95% CI)
+
+wind_mort_data_long <- wind_mort_data %>%
+  pivot_longer(cols = c(excess_death_rate,
+                        lower_95ci,
+                        upper_95ci),
+               names_to = "est_type",
+               values_to= "excess_death_rate")
+
+
+
+### Setting up models (for `long` version)
+
+wind_mort_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4),
+                       data = wind_mort_data)
+
+wind_mort_long_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4), 
+                            data = wind_mort_data_long)
+
+
+################# Alternative model
+
+# Central estimate
+wind_mort_fn_ns_pred <- data.frame(
+  windspeed = wind_mort_data$windspeed,
+  excess_death_est = predict(wind_mort_fn_ns, wind_mort_data)
+  )
+
+wind_mort_long_fn_ns_pred <- data.frame(
+  windspeed = wind_mort_data$windspeed,
+  excess_death_est = predict(wind_mort_long_fn_ns,
+                             wind_mort_data)
+)
+
+# Not sure if/how this captures CIs
+
+# Does lose some fidelity at the lower end (~17-25 m/s) 
+  # unit is "excess rates per 100,000 of mortality"
+    # So is that referring to # that die, or # population?
+      # i.e. would "10" mean an extra 10 deaths per 100k in county, OR
+      # an extra 10 deaths per 100,000 baseline deaths?
+    # Reading further up, I'm leaning towards *population*
+
+```
+
+> With a model set up, I'm moving on to setting up an integrated dataframe for exposure-mortality responses, as well as important derived statistics (notably, the estimated annual excess deaths):
+
+> Note that this is still a "one-off" setup, rather than a model. 
+
+```{r}
+
+# dataset:
+
+wind_mort_pred <- storm_winds %>%
+  filter(vmax_sust > 17) %>%
+  mutate(storm_year = as.numeric(
+    str_extract(storm_id, "[0-9]{4}"))) %>%
+  mutate(storm_years = max(storm_year) - min(storm_year)) %>% 
+  left_join((counties_mort_65 %>%
+              clean_names()),
+            by = c('fips' = 'county_code')) %>%
+  mutate(est_excess_death_rate = predict(wind_mort_long_fn_ns,
+                                     newdata = data.frame( windspeed = vmax_sust)),
+         est_excess_deaths_yr = est_excess_death_rate *
+           population / 100000 / storm_years) %>%
+  left_join(us_counties %>%
+              mutate(fips = paste0(STATEFP, COUNTYFP)))
+
+
+wind_mort_pred %>%
+  group_by(fips) %>%
+  nest() %>%
+  mutate(est_excess_deaths_sum = 
+           purrr::map(.x = data,
+                      .f = ~sum(.x$est_excess_deaths_yr))) %>%
+  unnest(cols = c(data, est_excess_deaths_sum)) %>%
+  data.frame %>%
+  ggplot() +
+  aes(geometry = geometry,
+      fill = est_excess_deaths_sum) +
+  geom_sf() +
+  scale_fill_viridis_c(trans = "log")
+
+```
+
+> With the groundwork established, I set up a function equivalent; unlike the standalone version, I'm attempting to use input data in a "raw" form where possible. 
+
+```{r}
+
+# function format for Nethery et al framework
+
+# Let's leave out data ~importing for now; the function needs to:
+  # match e.g. FIPS code to # storm events
+  # convert to average events/yr <- maybe add parameter for timeframe?
+  # get matching populations, etc.
+  
+
+wind_mort_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4), data = wind_mort_data)
+# Just using AIC; 4 is markedly better than 3 (~164k vs ~136k)
+# And increases again @ 5 knots -- 4 seems to be optimal
+# Adding CIs manually as separate models:
+
+wind_mort_fn_ns_ci_low <- glm(lower_95ci ~ ns(windspeed, 4), data = wind_mort_data)
+wind_mort_fn_ns_ci_high <- glm(upper_95ci ~ ns(windspeed, 4), data = wind_mort_data)
+
+
+# `fips` here is a vector of FIPS (*as characters*)
+county_mortality_pred <- function(fips , storm_data = storm_winds, pred_model = wind_mort_fn_ns, windspeed_min = -Inf, windspeed_max = Inf, storm_id = ".*") {
+  #wind_mort_long_fn_ns <- glm(excess_death_rate ~ ns(windspeed, 4), 
+  #                            data = wind_mort_data_long)
+  
+  estimates <- counties_mort_65 %>%
+    clean_names() %>%
+    filter(county_code %in% fips) %>%
+    left_join(
+    storm_data %>%
+    filter(vmax_sust > windspeed_min &
+           vmax_sust <= windspeed_max) %>%
+    filter(str_detect(storm_id, storm_id)) %>% # Need to clean up/think through  
+    mutate(storm_year = as.numeric(
+      str_extract(storm_id, "[0-9]{4}"))) %>%
+    mutate(storm_years = length(unique(storm_year))),
+  by = c("county_code" = "fips")
+    ) %>%
+    mutate(est_excess_death_rate = predict(pred_model,
+                                           newdata = data.frame( windspeed = vmax_sust)),
+           est_excess_deaths_yr = est_excess_death_rate *
+             population / 100000 / storm_years)
+  return(estimates)
+    
+}
+
+
+county_mortality_pred(fips = "22057") %>%
+  head()
+
+county_mortality_pred(fips = "22057") %>%
+  head()
+
+# Adding groundwork for alternative scenarios:
+
+storm_winds_t1 <- storm_winds %>%
+  mutate(storm_year = as.numeric(
+      str_extract(storm_id, "[0-9]{4}"))) %>%
+  filter(storm_year < 2003)
+
+
+
+storm_winds_t2 <- storm_winds %>%
+  mutate(storm_year = as.numeric(
+      str_extract(storm_id, "[0-9]{4}"))) %>%
+  filter(storm_year >= 2003)
+
+
+county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      storm_data = storm_winds_t2,
+                      wind_mort_fn_ns_ci_low) %>%
+  select(est_excess_deaths_yr) %>%
+  sum(na.rm = T)
+
+```
+  
+> With this framework, I can add different models as needed (using the ~proxy 95% CI values for an example):
+  
+```{r}
+# Let's get a sense of total variation?
+  # It seems like simple addition should hold up...
+
+# Center
+
+county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      wind_mort_fn_ns) %>%
+  select(est_excess_deaths_yr) %>%
+  sum(na.rm = T)
+
+
+# Upper:
+
+county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      wind_mort_fn_ns_ci_high) %>%
+  select(est_excess_deaths_yr) %>%
+  sum(na.rm = T)
+
+# Lower:
+
+
+county_mortality_pred(fips = counties_mort_65$`County Code`,
+                      wind_mort_fn_ns_ci_low) %>%
+  select(est_excess_deaths_yr) %>%
+  sum(na.rm = T)
+
+```
+
+> From this point, I'm able to focus on any one county or group of counties using the FIPS codes:
+
+```{r}
+### Trying one state:
+
+county_mortality_pred(fips = (counties_mort_65 %>%
+                                filter(str_detect(`County Code`,
+                                                  "^09")))$`County Code`,
+                      pred_model = wind_mort_fn_ns_ci_high) %>%
+  select(est_excess_deaths_yr) %>%
+  sum(na.rm = T)
+
+
+county_mortality_pred(fips = (counties_mort_65 %>%
+                                filter(str_detect(`County Code`,
+                                                  "^12")))$`County Code`,
+                      pred_model = wind_mort_fn_ns) %>%
+  #select(est_excess_deaths_yr) %>%
+  #sum(na.rm = T) %>%
+  group_by(county_code) %>%
+  nest() %>%
+  mutate(sum_excess_deaths = purrr::map(.x = data,
+                                        .f = ~sum(.$est_excess_deaths_yr))) %>%
+  unnest(cols = c(data, sum_excess_deaths)) %>%
+  mutate(sum_exces_deaths = sum(est_excess_deaths_yr, na.rm = T)) %>%
+  mutate(fips = county_code) %>%
+  left_join(us_counties %>%
+                                 mutate(fips = paste0(STATEFP, COUNTYFP))) %>%
+  ggplot() +
+  aes(fill = sum_exces_deaths, geometry = geometry) %>%
+  geom_sf()
+
+county_mortality_pred(fips = (counties_mort_65 %>%
+                                filter(str_detect(`County Code`,
+                                                  "^09")))$`County Code`,
+                      pred_model = wind_mort_fn_ns) %>%
+  select(est_excess_deaths_yr) %>%
+  sum(na.rm = T)
+
+
+
+```
+
+# Example Code for Synthetic Tracks
+
+> I also have code set up to iterate through synthetic storm tracks;
+
+```{r}
+
+synth_track_sample <- read_csv("STORM_DATA_IBTRACS_NA_5_YEARS_0.txt",
+                               col_names = FALSE) %>%
+  select(c(1, 2, 3,4,6,7,9)) %>%
+  rename("year" = 1,
+          "month" = 2,
+          "storm_id" = 3,
+         'timestep' = 4,
+         'latitude' = 5,
+         'longitude' = 6,
+         'wind' = 7) %>%
+    mutate(year = year + 1,
+           hours_base = timestep * 3,
+           hour = hours_base %% 24,
+           day = ((hours_base - hour) / 24) + 1,
+           wind = wind * 1.94384449) %>% # converting to knots
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+         
+         )) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+head(synth_track_sample)
+
+
+# Example of what a "run" would look like:
+  # Commenting out because it takes a while to run
+
+i <- 14 # in practice this will be automatically assigned
+
+#synth_track_sample %>%
+#  filter(storm_id == i) %>%
+#  select(-storm_id) %>%
+#  get_grid_winds(tint = 3) # matches the 3-hr interval in Alex's data, but not sure that's the right interpretation
+
+
+```
+
+> I'm currently planning for one large dataframe as the input, but could modify it to iterate by scenario as well. The system will look like a large directory with many small R scripts like this (with procedural generation of storm ids to run through a 'complete' set), and a matching directory full of SLURM scripts calling each R file.
+
+  > I've also come across a few functions/libraries that explicitly allow running on multiple threads (rather than relying on separating jobs upstream), but I'm less familiar on how they integrate with SUMMIT.
