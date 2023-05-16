@@ -201,5 +201,5 @@ county_acs_vars_bayesian <- county_acs_vars %>%
 
 load("01_data/modobj.RData")
 
-
-
+source("02_code/pred_function.R")
+  #both from Dr. Nethery

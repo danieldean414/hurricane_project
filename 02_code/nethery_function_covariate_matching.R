@@ -1,5 +1,9 @@
 # Tracking down county traits:
 
+load("01_data/modobj.RData")
+library(readxl)
+library(tidyverse)
+
 
 ##  vmax_sust: modeled maximum sustained wind speed at the population centroid of the county during the TC in m/s (from hurricaneexposuredata package)
 ##  sust_dur: duration of sustained wind speeds above 20 m/s at the population centroid of the county during the TC (from hurricaneexposuredata package)
@@ -33,6 +37,8 @@ exposure_draft1 <- hurricaneexposuredata::storm_winds %>%
   unique() %>%
   group_by(fips) %>%
   dplyr::summarize(exposure = n())
+
+
 
 # Still not matching exposure (~17 seems to be closest, but mean/median is too low at ~2 vs ~5)
 

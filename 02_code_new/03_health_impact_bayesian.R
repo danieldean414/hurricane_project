@@ -20,7 +20,7 @@ test_bayesian_data_conus <- tc_merged_data
 test_bayesian_conus <- predict(modobj, newdata = (test_bayesian_data_conus %>% 
                                                     filter(!is.na(median_house_value))))
 
-# OK, keep running into error 
+# OK, keep running into error  ('cannot allocate vector of size 1014.2 Mb <-- seems reasonable!)
   # Error in UseMethod("predict") : 
       # no applicable method for 'predict' applied to an object of class "tcExcessMort"
 
