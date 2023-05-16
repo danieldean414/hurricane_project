@@ -8,8 +8,29 @@ test_bayesian_data <- (hurricaneexposuredata::storm_winds %>%
                                    by = c("fips" = "GEOID")))
 
 test_bayesian <- predict(modobj, newdata = (test_bayesian_data %>% filter(!is.na(median_house_value))))
+  # OK, no strucutre as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
 
+
+test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data[13,]))
+  # 1000 ~rows (trying to remember how to handle--do you do summary statistics?)
+    # so rowwise application might make sense
+
+# OK, this could work:
+
+test_bayesian_rowwise <- test_bayesian_data %>%
+  filter(vmax_sust >= 17.4) %>%
+  group_by(fips, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)))
+
+test_bayesian_rowwise %>%
+  mutate(impact_summary = summary()) %>%
+  unnest(data)
 ####
+
+############################################################################################################
+  # OK, think everything below this can be skipped, but holding off on deleting for now...
+############################################################################################################
 
 #test_bayesian_data_conus <- (amo_merged_250_clean_get_grid %>% 
 #                               left_join(county_acs_vars_bayesian, 
@@ -47,7 +68,7 @@ for(storm_id_TMP in test_bayesian_data_conus_split){
 }
 
 
-
+  # Oh, interesting--looks like it crashed in the notes, but worked this one
 #### Nope--still not enough memory (same figure of 28.7 Gb as well); let's try parallel processing?
 
 # parallel processing
@@ -69,7 +90,7 @@ result_list <- llply(test_bayesian_data_conus_split, function(x) {
 })
 
 
-library(parallel)
+#library(parallel)
 #all
 start <- proc.time()
 #cl <- makeCluster(7, "modobj") # 8 for ~full utilization
@@ -84,17 +105,17 @@ stopCluster(cl)
 end <- proc.time()
 print(end - start) 
 
-
+  #~1-2 seconds, or ~16 'elapsed'
 
 # trying to figure out how it lines up with FIPS; seems to drop rows w/ missing data
 test_bayesian_10 <- predict(modobj, newdata = test_bayesian_data[1:10,])
 # So I think every row is a county (w/ 1000 predictions?); I have to assume in order provided
 # However, full dataset is shorter than provided list; presumably dropping relevant NAs
-# could create ~cascading mismatches since it jsut outputs a numeric dataframe
-# so need to prefilter carefully (trying that above--let's see if it matches)
+# could create ~cascading mismatches since it just outputs a numeric dataframe
+# so need to pre-filter carefully (trying that above--let's see if it matches)
 
 # OK, removing the 342 counties without median house value data accounts for difference in length
-
+  # looks like I'm using a fixed year ; I don't *think* the function uses any year-to-year trends?
 
 test_bayesian_fixed_year <- predict(modobj, newdata = (test_bayesian_data %>% mutate(year = 2015)))
 
