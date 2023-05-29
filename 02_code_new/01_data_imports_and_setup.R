@@ -26,7 +26,6 @@ library(tidyverse)
 
 ############## Netcdf4 data (hurricane simulation output)
 
-<<<<<<< HEAD
 # Adding Alice's list of ENSO categorizations
 
 enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
@@ -37,35 +36,6 @@ enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
 
 enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71") %>%
   clean_names()
-
-=======
->>>>>>> 8d9fbec9868caa66415b8f619a8177c4c67a222b
-  # List of years (from Alex's notes; should ~re-justify)
-    # Use ONI
-
-
-el_nino <- c(1951, 1957, 1963, 1965, 1972, 1976, 1977, 1979, 1982, 1986, 1987, 1991, 1992, 1993, 1994, 1997, 2002, 2004, 2006, 2009, 2014, 2015)
-
-neutral <- c(1952, 1953, 1958, 1959, 1960, 1961, 1966, 1968, 1969, 1978, 1980, 1981, 1983, 1984, 1985, 1989, 1990, 1995, 1996, 2000, 2001, 2003, 2005, 2012, 2013, 2016, 2017, 2018, 2019)
-
-la_nina <- c(1950, 1954, 1955, 1956, 1962, 1964, 1967, 1970, 1971, 1973, 1974, 1975, 1988, 1998, 1999, 2007, 2008, 2010, 2011)
-
-amo_pos <- c(1951:1961, 1995:2019)
-
-amo_neg <- c(1962:1994)
-
-nino_amo_pos <- c(1951, 1957, 1997, 2002, 2004, 2006, 2009, 2014, 2015)
-
-nino_amo_neg <- c(1963, 1965, 1972, 1976, 1977, 1979, 1982, 1986, 1987, 1991, 1992, 1993, 1994)
-
-neutral_amo_pos <- c(1952, 1953, 1958, 1959, 1960, 1961, 1995, 1996, 2000, 2001, 2003, 2005, 2012, 2013, 2016, 2017, 2018, 2019)
-
-neutral_amo_neg <- c(1966, 1968, 1969, 1978, 1980, 1981, 1983, 1984, 1985, 1989, 1990)
-
-nina_amo_pos <- c(1950, 1954, 1955, 1956, 1998, 1999, 2007, 2008, 2010, 2011)
-
-nina_amo_neg <- c(1962, 1964, 1967, 1970, 1971, 1973, 1974, 1975, 1988)
-
 
 # **  Using old data for now--issues w/ date-time agreement in CLIMADA output
 
