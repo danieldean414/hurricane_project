@@ -26,6 +26,7 @@ library(tidyverse)
 
 ############## Netcdf4 data (hurricane simulation output)
 
+<<<<<<< HEAD
 # Adding Alice's list of ENSO categorizations
 
 enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
@@ -37,6 +38,8 @@ enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
 enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71") %>%
   clean_names()
 
+=======
+>>>>>>> 8d9fbec9868caa66415b8f619a8177c4c67a222b
   # List of years (from Alex's notes; should ~re-justify)
     # Use ONI
 
