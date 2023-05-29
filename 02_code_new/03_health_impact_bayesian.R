@@ -21,11 +21,88 @@ test_bayesian_rowwise <- test_bayesian_data %>%
   filter(vmax_sust >= 17.4) %>%
   group_by(fips, storm_id) %>%
   nest() %>%
-  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)))
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )#,
+         #impact_summary = purrr::map(.x = impact, .f = ~summary(unlist(.x))))
+
+test_bayesian_rowwise_summarized <- test_bayesian_data %>%
+  filter(vmax_sust >= 17.4) %>%
+  group_by(fips, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)),
+         impact_lower = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.025))),
+         impact_median = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.5))),
+         impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
+
+  # oh, adding a summary step seems to make the runtime a lot longer...
+
+test_df <- test_bayesian_rowwise_summarized %>%
+  unnest(impact_lower, impact_median, impact_upper) %>%
+  ungroup() %>%
+  group_by(fips) %>% 
+  dplyr::summarize(impact_median_median = median(impact_median, na.rm = T),
+                   impact_lower_median = median(impact_lower, na.rm = T), 
+                   impact_upper_median = median(impact_upper, na.rm = T))
+
+
+test_df %>% 
+  filter(!is.na(impact_median_median)) %>%
+  left_join(county_acs_vars_bayesian, by = c("fips" = "GEOID")) %>%
+  ggplot() +
+  aes(geometry =geometry)
+
+
+  # Oh, just realized this doesn't have the storm categories here; I guess treat as one unit?
 
 test_bayesian_rowwise %>%
-  mutate(impact_summary = summary()) %>%
+  ungroup() %>%
+  dplyr::select(fips, storm_id, impact, - storm_id) %>%
+  group_by(fips) %>%
+  mutate(impact = sum(impact))
+  
+  
+mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(data_in = unlist(.x))))
+
+
+
+# Weird; just grabbing means only takes a few seconds, but something like `summary()` runs indefinitely
+  
+# Trying to get 95% CI assuming a normal distirubiton
+
+get_95_ci <- function(data_in){
+  s_d = sd(data_in, na.rm = TRUE)
+  error = qnorm(0.975)*s_d/sqrt(length(data_in))
+  mean = mean(data_in)
+  
+  sd_obj = list(
+    mean = mean,
+    lower = mean - error,
+    upper = mean + error
+  )
+  return(sd_obj)
+}
+
+test_bayesian_rowwise %>%
   unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
+  
+ 
+
+# Trying to write a 95% CI script
+# https://www.cyclismo.org/tutorial/R/confidence.html#:~:text=We%20use%20a%2095%25%20confidence%20level%20and%20wish,%2B%20error%20%3E%20left%204.063971%20%3E%20right%205.936029 from 
+
+#sample mean is 5, the standard deviation is 2, and the sample size is 20 
+
+a <- 5
+ s <- 2
+ n <- 20
+ error <- qnorm(0.975)*s/sqrt(n)
+ left <- a-error
+ right <- a+error
+ left
+#[1] 4.123477
+ right
+#[1] 5.876523
+
 ####
 
 ############################################################################################################

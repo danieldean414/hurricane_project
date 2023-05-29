@@ -1,0 +1,24 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+TCWiSE_toolbox_v1.0.79.zip
+amo_pos_250_clean_input_test.csv
+amo_all_250_clean_input_test.csv
+*.pdf
+ncap2_test.nc.pid663.ncap2.tmp
+'the_oceans_and_weather-2cq1lnc (1).pdf'
+Barcellona_course_application_drafts.docx
+03_output/*
+*.html
+modobj.Rda
+01_data/amo_neg_250_clean_get_grid_alt_date_CONUS.rda
+01_data/amo_merged_250_clean_get_grid.rda
+01_data/amo_neg_250_clean_get_grid_TEST_comb_1s_SHORT.csv
+01_data/amo_all_250_clean_get_grid_TEST_comb_1s_SHORT.csv
+01_data/amo_all_250_clean_get_grid_alt_date_CONUS.rda
+01_data/amo_pos_250_clean_get_grid_TEST_comb_1s_SHORT.csv
+01_data/amo_pos_250_clean_get_grid_alt_date_CONUS.rda
+01_data/test_bayesian_conus_prefiltered.rda
+01_data/test_bayesian_conus_prefiltered_unit_conversion.rda 
+modobj.RData 

@@ -60,8 +60,11 @@ library(janitor)
 library(splines)
 
 library(parallel)
-library(stormwindmodel)
 
+#library(stormwindmodel)
+devtools::install_github("geanders/stormwindmodel", build_vignettes = TRUE)
+  # using newer version; one should be using C--faster
+  
 library(hurricaneexposuredata)
   # Loading data for storm events and properties
 

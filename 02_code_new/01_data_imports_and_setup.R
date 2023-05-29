@@ -9,7 +9,8 @@ library(splines)
 library(drat)
 library(readxl)
 library(parallel)
-library(stormwindmodel)
+#library(stormwindmodel)
+devtools::install_github("geanders/stormwindmodel", build_vignettes = TRUE) # latest version
 library(openxlsx)
 library(splines)
 library(plyr)
@@ -24,6 +25,44 @@ library(tidyverse)
 ########## Data
 
 ############## Netcdf4 data (hurricane simulation output)
+
+# Adding Alice's list of ENSO categorizations
+
+enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
+  pivot_longer(cols = 1:3, names_to = "phase", values_to = "year") %>% # right term?
+  filter(!is.na('value'))  # for some reason only works w/ 'value' in qoutes?
+
+# not sure if we'd need exact ONI values, but 
+
+enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71") %>%
+  clean_names()
+
+  # List of years (from Alex's notes; should ~re-justify)
+    # Use ONI
+
+
+el_nino <- c(1951, 1957, 1963, 1965, 1972, 1976, 1977, 1979, 1982, 1986, 1987, 1991, 1992, 1993, 1994, 1997, 2002, 2004, 2006, 2009, 2014, 2015)
+
+neutral <- c(1952, 1953, 1958, 1959, 1960, 1961, 1966, 1968, 1969, 1978, 1980, 1981, 1983, 1984, 1985, 1989, 1990, 1995, 1996, 2000, 2001, 2003, 2005, 2012, 2013, 2016, 2017, 2018, 2019)
+
+la_nina <- c(1950, 1954, 1955, 1956, 1962, 1964, 1967, 1970, 1971, 1973, 1974, 1975, 1988, 1998, 1999, 2007, 2008, 2010, 2011)
+
+amo_pos <- c(1951:1961, 1995:2019)
+
+amo_neg <- c(1962:1994)
+
+nino_amo_pos <- c(1951, 1957, 1997, 2002, 2004, 2006, 2009, 2014, 2015)
+
+nino_amo_neg <- c(1963, 1965, 1972, 1976, 1977, 1979, 1982, 1986, 1987, 1991, 1992, 1993, 1994)
+
+neutral_amo_pos <- c(1952, 1953, 1958, 1959, 1960, 1961, 1995, 1996, 2000, 2001, 2003, 2005, 2012, 2013, 2016, 2017, 2018, 2019)
+
+neutral_amo_neg <- c(1966, 1968, 1969, 1978, 1980, 1981, 1983, 1984, 1985, 1989, 1990)
+
+nina_amo_pos <- c(1950, 1954, 1955, 1956, 1998, 1999, 2007, 2008, 2010, 2011)
+
+nina_amo_neg <- c(1962, 1964, 1967, 1970, 1971, 1973, 1974, 1975, 1988)
+
 
 # **  Using old data for now--issues w/ date-time agreement in CLIMADA output
 
@@ -153,14 +192,14 @@ coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE,
 
 exposure_draft1 <- hurricaneexposuredata::storm_winds %>% 
   mutate(storm_year = str_extract_all(storm_id, "[0-9]{4}")) %>%
-  filter(storm_year %in% c(1999:2015) & vmax_sust > 20) %>%
+  filter(storm_year %in% c(1999:2020) & vmax_sust > 20) %>% # double-check that this aligns with current model
   select(fips, storm_id) %>%
   unique() %>%
   group_by(fips) %>%
   dplyr::summarize(exposure = n())
 
 ###
-
+  # adding an extra variable for actual population age 65+; don't think that should cause any issues
 county_acs_vars_bayesian <- county_acs_vars %>%
   select(-moe) %>%
   pivot_wider(names_from = variable,
@@ -168,7 +207,7 @@ county_acs_vars_bayesian <- county_acs_vars %>%
   mutate(poverty_prop = B06012_002 / B06012_001,
          white_prop = B02001_002 / B02001_001,
          owner_occupied_prop = B07013_002 / B07013_001,
-         age_pct_65_plus_prop = (B01001_020 +
+         age_65_plus = (B01001_020 +
                                    B01001_021 +
                                    B01001_022 +
                                    B01001_023 +
@@ -179,7 +218,8 @@ county_acs_vars_bayesian <- county_acs_vars %>%
                                    B01001_046 +
                                    B01001_047 +
                                    B01001_048 +
-                                   B01001_049) / B01001_001,
+                                   B01001_049),
+         age_pct_65_plus_prop = age_65_plus / B01001_001,
          median_age = B01002_001,
          median_house_value = B25077_001,
          no_grad_prop = B06009_002 / B06009_001
@@ -203,3 +243,5 @@ load("01_data/modobj.RData")
 
 source("02_code/pred_function.R")
   #both from Dr. Nethery
+
+
