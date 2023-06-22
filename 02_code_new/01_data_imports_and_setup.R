@@ -9,8 +9,8 @@ library(splines)
 library(drat)
 library(readxl)
 library(parallel)
-#library(stormwindmodel)
-devtools::install_github("geanders/stormwindmodel", build_vignettes = TRUE) # latest version
+library(stormwindmodel)
+#devtools::install_github("geanders/stormwindmodel", build_vignettes = TRUE) # latest version
 library(openxlsx)
 library(splines)
 library(plyr)
@@ -39,7 +39,145 @@ enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71")
 
 # **  Using old data for now--issues w/ date-time agreement in CLIMADA output
 
-############# REPLACEW WITH EITHER CLIMADA OR CHAZ DATA ONCE DATES ARE RESOLVED
+############# Loading pre-generated data
+  # STORM (structure/contents seem easier to understand, at least)
+
+  # I think this is consoistent for historical and simulated
+#########################################
+#Entry	Variable name			Unit		Notes on variable
+#1	Year				-		Starts at 0
+#2	Month				-	
+#3	TC number			-		For every year; starts at 0. 
+#4	Time step			3-hourly	For every TC; starts at 0.
+#5	Basin ID			-		0=EP, 1=NA, 2=NI, 3=SI, 4=SP, 5=WP
+#6	Latitude			Deg		Position of the eye.
+#7	Longitude			Deg		Position of the eye. Ranges from 0-360°, with prime meridian at Greenwich.
+#8	Minimum pressure		hPa	
+#9	Maximum wind speed		m/s	
+#10	Radius to maximum winds		km	
+#11	Category			-		.
+#12	Landfall			-		0= no landfall, 1= landfall
+#13	Distance to land		km	
+
+###########################################
+storm_names <- c('year', 'month', 'tc_number', 'time_step', 
+                 'basin_id', 'latitude','longitude',
+                 'min_pressure', 'max_wind_speed','rad_to_max_winds',
+                 'category','landfall', 'dist_to_land')
+
+# 10k years with historical data:
+  # Oh, STORM data is already converted into .tsv files;
+    # 60 files, so need to do some kind of loop <-- maybe just an rbind()?
+
+storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
+                                 full.names = TRUE, pattern = ".*NA.*") 
+
+  # Wow, was forgetting to pre-filter to North Atlantic!
+    # still too big to read in with a direct call, but loop might work now...
+
+  # hopefully not too much memory here...
+# storm_10k_obs_all <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
+  #hmm; 'resource temporarily unavailable'-- assuming it's memory-based?
+    # any way I can reduce RAM load (e.g. pre-aggregating)?
+    # or else run on server
+
+storm_10k_obs_na <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
+
+names(storm_10k_obs_test) <- storm_names
+
+# Pulling up processing step to save storage size (might still be too much  'active' memory)
+  # not thinking of a non-loop approach at the moment...
+
+#storm_10k_obs_template <- data.frame(matrix(ncol = 13, nrow = 0))
+storm_10k_obs_template <- data.frame(matrix(ncol = 5, nrow  = 0))
+names(storm_10k_obs_template) <- c("storm_id", "date","latitude",
+                                   "longitude", "wind")
+
+storm_10k_obs <- storm_10k_obs_template
+
+for(file in storm_10k_obs_list){
+  readin_tmp <- read_csv(file, col_names = FALSE)
+  names(readin_tmp) <- storm_names
+  
+  processed <- readin_tmp %>%
+    mutate(year = year + 1,
+           #hours_base = timestep_3_hourly * 3,
+           hours_base = time_step * 3,
+           hour = hours_base %% 24,
+           day = ((hours_base - hour) / 24) + 1,
+           storm_id = paste(tc_number,
+                            str_pad(year, width = 4,
+                                    side = "left",
+                                    pad = 0),
+                            sep = "-"),
+           wind = max_wind_speed / 1.852 # converting km/h to knots
+    ) %>% 
+    mutate(date = 
+             paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                    str_pad(month, width = 2, side = "left", pad = 0),
+                    str_pad(day, width = 2, side = "left", pad = 0),
+                    str_pad(hour, width = 2, side = "left", pad = 0),
+                    "00"
+                    
+             )) %>%
+    select(storm_id, date, latitude, longitude, wind)
+  
+  storm_10k_obs <- rbind(storm_10k_obs, processed)
+  print(file)
+}
+  #OK, hit a memory error; should have included some print function to get file #!
+  # 16,617,679 rows, so 33ish files
+
+# Weird, after prefiltering to NA, still crashed after only ~1 million rows!
+
+# OK, should be able to feed into existing steps now
+  # oh, feeling like setting up on server is definitely seeming plausible
+    # yeah, already up to ~2 GB *just loading* 1/6 of the ~pseudo-historical files
+
+# shouldn't need major modifications;
+
+
+storm_10k_obs_test_3hr <- storm_10k_obs_test %>%
+  clean_names() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          sep = "-"),
+         wind = max_wind_speed / 1.852 # converting km/h to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           )) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+# Oh, wow! No wonder there are issues! ~5 million rows just here!
+    # so would be ~~12 Gb RAM alltogether
+    # so ~30 million to process 
+  # I wonder how much memory each row holds? b/c 'procesed' version is 5 vs 13 cols 
+    # e.g. maybe could process and discard each file and only merge outputs?
+  # Oh, learned a new function!
+    # object.size()
+      # 525366860 bytes (~500 Mb) for 'raw' version, 191257904 (<200 Kb) for above output 
+      # oh, so that *is* an appreciable difference! Could fit 2.7x the rows of 'processed' data
+        # so ~45%/~4500 years
+        # and keep in mind I have >700 Mb between the 2 at ~2 Gb system memory ,so not untenable
+########
+
+  # CHAZ--organized in figure-based .nc files
+
+
+############# REPLACE WITH EITHER CLIMADA OR CHAZ DATA ONCE DATES ARE RESOLVED
 
 
 #storm_25yr_sim_raw <- read_csv("../../Downloads/STORM_25_years.csv")
