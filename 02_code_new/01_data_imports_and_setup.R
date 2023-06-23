@@ -83,7 +83,37 @@ storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/",
 
 storm_10k_obs_na <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
 
-names(storm_10k_obs_test) <- storm_names
+names(storm_10k_obs_na) <- storm_names
+
+storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
+  group_by(tc_number) %>%
+  filter(longitude < 290 & latitude > 25) %>%
+  filter(sum(landfall) > 1) %>%
+  ungroup() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          sep = "-"),
+         wind = max_wind_speed / 1.852 # converting km/h to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           ),
+         longitude = longitude ) %>%#- 360) %>%
+  select(storm_id, date, latitude, longitude, wind)
+
+# Oh, after a restart just 
 
 # Pulling up processing step to save storage size (might still be too much  'active' memory)
   # not thinking of a non-loop approach at the moment...

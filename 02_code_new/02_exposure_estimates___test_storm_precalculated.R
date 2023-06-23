@@ -2,10 +2,17 @@
   # temporarily using a older, pre-processed set of storm data
     # CLIMADA date/time issues
 
-storm_10k_obs_50k <- storm_10k_obs[1:50000,] # yeah, trying 50k rows out of the ~3.4 million
+storm_10k_obs_50k <- storm_10k_obs[1:50000,] %>% # yeah, trying 50k rows out of the ~3.4 million
+  mutate(longitude = longitude - 360)
 
 storm_10k_obs_50k_split <- split(storm_10k_obs_50k,
                                     f = storm_10k_obs_50k$storm_id)
+
+# seeing if the longitude format (seems to show degrees west as deg. east + west)
+  # whereas the `floyd_tracks` dataset shows it as negative degrees east
+  # so I think use 180 - longitude
+  # seeing if that gives fewer NAs
+    # although then I'd expect *no* valid results...
 
 ########## Parallel Computing Step: relatively intensive, so run with caution
   # ideally run once and save output as .rda
@@ -18,18 +25,98 @@ storm_10k_obs_50k_split <- split(storm_10k_obs_50k,
 
 start <- proc.time()
 cl <- makeCluster(6) # 8 for ~full utilization
-storm_winds_storm_10k_obs_50k <- parLapply(cl,
+storm_winds_storm_10k_obs_leg_lon_50k <- parLapply(cl,
                                    (storm_10k_obs_50k_split),
                                   get_grid_winds)
 stopCluster(cl)
 end <- proc.time()
 print(end - start) 
 
+
+storm_winds_storm_10k_obs_leg_lon_50k_comb <- do.call("rbind", storm_winds_storm_10k_obs_leg_lon_50k)
+
+storm_counties <- storm_winds_storm_10k_obs_leg_lon_50k_comb$gridid %>% unique()
+
   #well, that didn't take long! 
     # user  system elapsed 
     # 2.40    0.85  460.54 
 
   #think I'll try with the full dataset
+    # also pretty quick, although sort of alarmingly messed up the UI
+    # huh--some 'NA' results; trying to figure out what might be causing that
+      # some possibilities:
+        # looks like the *dates* are NAs, and other variables are 0's, so maybe a formatting issue?
+        # maybe there's a minimum windspeed?
+        # Noticing the NA's are for certain gridid's (FIPS), so maybe that's the output for non-exosed areas?
+        # specific column is `date_time_max_wind`; might be significant
+storm_10k_obs <- storm_10k_obs_na_proc
+
+storm_10k_obs_split <- split(storm_10k_obs,
+                                 f = storm_10k_obs$storm_id)
+
+# Yeah, so even with changing from ~positive to ~negative notation for degrees East,
+  #still ~56% NA's (didn't check last time)
+  # also sust_dur and gust_dur are showing up as uniformly 0's--don't remember that
+
+# trying to figure out which CRS to use
+  # either WGS84  or NAD83 , probably
+
+us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
+us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
+
+
+
+# trying to think if there's an efficient way to check for boundary overlaps
+  # e.g. maybe a lot of NA storms just don't clip the US?
+
+# are we supposed to preserve the storm_ids with this? <- looks like it doesn't use them
+  # so would need to e.g. add that as a new variable if I want to separate them
+
+########## Parallel Computing Step: relatively intensive, so run with caution
+# ideally run once and save output as .rda
+####################################################################
+####################################################################
+
+
+# Setting up parameters for parallel run:
+# Realized I need to comment out to make it practical to run/render
+
+start <- proc.time()
+cl <- makeCluster(6) # 8 for ~full utilization
+storm_winds_storm_10k_obs <- parLapply(cl,
+                                           (storm_10k_obs_split),
+                                           get_grid_winds)
+stopCluster(cl)
+end <- proc.time()
+print(end - start) 
+
+storm_winds_storm_10k_obs_comb <- do.call("rbind", storm_winds_storm_10k_obs)
+
+us_counties_wgs84 %>%
+  filter(GEOID %in% storm_counties) %>%
+  ggplot() +
+  aes(geometry = geometry) +
+  geom_sf() +
+  theme_classic() 
+
+ggplot() +
+  geom_sf(aes(
+    geometry = (us_counties_wgs84 %>%
+                  filter(GEOID %in% storm_counties))$geometry
+  )) +
+  geom_sf(aes(
+    geometry = ((storm_10k_obs_50k_split$`1-0021` %>%
+                   st_as_sf(coords = c('longitude', 'latitude'), 
+                            crs = "WGS84"))$geometry)
+  ))
+
+# OK, 
+
+#well, that didn't take long! 
+# user  system elapsed 
+# 2.40    0.85  460.54 
+
+#think I'll try with the full dataset
 
 #save(storm_winds_25yr_grid_3hr, file = "03_output/storm_winds_25yr_grid_3hr.rda")
 
