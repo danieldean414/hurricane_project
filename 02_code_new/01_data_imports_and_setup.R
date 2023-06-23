@@ -10,6 +10,7 @@ library(drat)
 library(readxl)
 library(parallel)
 library(stormwindmodel)
+library(sf)
 #devtools::install_github("geanders/stormwindmodel", build_vignettes = TRUE) # latest version
 library(openxlsx)
 library(splines)
@@ -110,7 +111,7 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
                   "00"
                   
            ),
-         longitude = longitude ) %>%#- 360) %>%
+         longitude = longitude -360) %>%# also seems to work as-is in some cases?
   select(storm_id, date, latitude, longitude, wind)
 
 # Oh, after a restart just 

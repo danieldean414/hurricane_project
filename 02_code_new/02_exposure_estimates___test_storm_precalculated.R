@@ -49,7 +49,13 @@ storm_counties <- storm_winds_storm_10k_obs_leg_lon_50k_comb$gridid %>% unique()
         # maybe there's a minimum windspeed?
         # Noticing the NA's are for certain gridid's (FIPS), so maybe that's the output for non-exosed areas?
         # specific column is `date_time_max_wind`; might be significant
-storm_10k_obs <- storm_10k_obs_na_proc
+storm_10k_obs <- storm_10k_obs_na_proc %>%
+  add_count(storm_id) %>% filter(n > 2) %>%
+  filter(n > 2) %>% # not sure if there's a functional minimum
+  dplyr::select(-n)
+  # from looking around, causes for the error I'm getting could be at least one of:
+    # too few points to interpolate
+    # wrong order for e.g. dates -- seems unlikely sans e.g. bracketing issue
 
 storm_10k_obs_split <- split(storm_10k_obs,
                                  f = storm_10k_obs$storm_id)
@@ -90,7 +96,7 @@ stopCluster(cl)
 end <- proc.time()
 print(end - start) 
 
-storm_winds_storm_10k_obs_comb <- do.call("rbind", storm_winds_storm_10k_obs)
+storm_10k_obs_Winds_comb <- do.call("rbind", storm_10k_obs_split)
 
 us_counties_wgs84 %>%
   filter(GEOID %in% storm_counties) %>%
