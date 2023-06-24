@@ -114,8 +114,10 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
   mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
   dplyr::mutate(cross_sum = cumsum(cross),
                 max_cross_sum = max(cross_sum)) %>%
-  filter(!(us_contact == FALSE & cross == FALSE) &
-           !(us_contact == FALSE & cross_sum == max_cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
   #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
   ungroup() %>%
   mutate(year = year + 1,
