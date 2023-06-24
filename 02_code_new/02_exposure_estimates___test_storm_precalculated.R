@@ -35,7 +35,6 @@ print(end - start)
 
 storm_winds_storm_10k_obs_leg_lon_50k_comb <- do.call("rbind", storm_winds_storm_10k_obs_leg_lon_50k)
 
-storm_counties <- storm_winds_storm_10k_obs_leg_lon_50k_comb$gridid %>% unique()
 
   #well, that didn't take long! 
     # user  system elapsed 
@@ -50,8 +49,8 @@ storm_counties <- storm_winds_storm_10k_obs_leg_lon_50k_comb$gridid %>% unique()
         # Noticing the NA's are for certain gridid's (FIPS), so maybe that's the output for non-exosed areas?
         # specific column is `date_time_max_wind`; might be significant
 storm_10k_obs <- storm_10k_obs_na_proc %>%
-  add_count(storm_id) %>% filter(n > 2) %>%
-  filter(n > 2) %>% # not sure if there's a functional minimum
+  add_count(storm_id) %>% 
+#  filter(n > 2) %>% # not sure if there's a functional minimum
   dplyr::select(-n)
   # from looking around, causes for the error I'm getting could be at least one of:
     # too few points to interpolate
@@ -96,7 +95,32 @@ stopCluster(cl)
 end <- proc.time()
 print(end - start) 
 
-storm_10k_obs_Winds_comb <- do.call("rbind", storm_10k_obs_split)
+storm_winds_storm_10k_obs_comb <- do.call("rbind", storm_winds_storm_10k_obs)
+
+
+# argh, keep hitting that same issue; tempted to try running a loop to see where it breaks?
+  # 12.6k storms
+  # I guess could at least see if it breaks quickly
+    # yeah, wow--breaks on very 1st run <- not sure why the 50k subset worked, then
+    # does work for misc. others
+    # huh; what's going on...
+
+  # OK, plotting again, I think the clipping might be confusing it?
+    # e.g. 1st storm somehow clips out maybe 3 times
+    # other thought would be that if it's somehow conflating storms?
+    
+  # So, I think make a ~'helper' column to track if they're in the zone at least once
+
+for(storm in storm_10k_obs_split){
+  storm_in <- storm
+  grid_winds <- get_grid_winds(storm_10k_obs_split)
+  
+}
+
+
+
+storm_counties <- storm_10k_obs_winds_comb$gridid %>% unique()
+
 
 us_counties_wgs84 %>%
   filter(GEOID %in% storm_counties) %>%

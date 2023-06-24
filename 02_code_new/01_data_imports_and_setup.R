@@ -60,6 +60,14 @@ enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71")
 #12	Landfall			-		0= no landfall, 1= landfall
 #13	Distance to land		km	
 
+# confused by tc_number
+  # e.g. I see maybe 4-5 "tc 0's" for year 0, each in a different month
+  # am I somehow changing the years?
+    # ohhh--I think I got it: each block of 1000 years restarts at "0"
+      # can't think of any downsides to just adding 1000 per file?
+        # could do in loop; trying to think how to approach otherwise
+    # wasn't coming up before because I was testing with <1000 years
+
 ###########################################
 storm_names <- c('year', 'month', 'tc_number', 'time_step', 
                  'basin_id', 'latitude','longitude',
@@ -82,14 +90,33 @@ storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/",
     # any way I can reduce RAM load (e.g. pre-aggregating)?
     # or else run on server
 
-storm_10k_obs_na <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
+storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
+  # trying to think through an efficient way to add some index for set of years
+  # seem to have hit memory limit (~3 GB); doesn't seem to let me read them in again
+  
+# try:
+#storm_10k_obs_na <- dplyr::bind_rows(read_csv(storm_10k_obs_list, col_names = FALSE), .id = 'year_set')
+  # oh, turns out `rbind` is superfluous, so already just one dataframe
 
 names(storm_10k_obs_na) <- storm_names
 
 storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
-  group_by(tc_number) %>%
-  filter(longitude < 290 & latitude > 25) %>%
-  filter(sum(landfall) > 1) %>%
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  dplyr::select(-change) %>%
+  mutate(us_contact = (longitude < 290 & latitude > 25)) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(year, tc_number, year_set) %>%
+  dplyr::filter(sum(landfall) > 1) %>%
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & cross == FALSE) &
+           !(us_contact == FALSE & cross_sum == max_cross_sum)) %>%
+  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
   ungroup() %>%
   mutate(year = year + 1,
          #hours_base = timestep_3_hourly * 3,
@@ -100,6 +127,7 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
                           str_pad(year, width = 4,
                                   side = "left",
                                   pad = 0),
+                          year_set,
                           sep = "-"),
          wind = max_wind_speed / 1.852 # converting km/h to knots
   ) %>% 
@@ -111,10 +139,17 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
                   "00"
                   
            ),
-         longitude = longitude -360) %>%# also seems to work as-is in some cases?
+         longitude = longitude -360) %>%# also seems to work as-is?
   select(storm_id, date, latitude, longitude, wind)
 
-# Oh, after a restart just 
+# Alright, probably not the cleanest, but think I have the right years!
+  # ohh--is the date format set up to recognize 5-digit years? I guess I'll find out
+
+# OK, think I can remove the rest of the hurricane data
+  # *do* need to keep the county data, etc.
+###########################################################################################################
+#REMOVE BETWEEN HERE AND ~276
+
 
 # Pulling up processing step to save storage size (might still be too much  'active' memory)
   # not thinking of a non-loop approach at the moment...
@@ -246,7 +281,7 @@ storm_25yr_sim_3hr <- storm_25yr_sim_raw %>%
 
 
 
-#######
+###############################################################################################################
 
 ######### County data <-- now that I'm using placeholder storm data, *could* combine at this stage
       # once the date/time issue is corrected, maybe run that process first in a separate script?
@@ -258,6 +293,8 @@ us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) %>% # To avoid 
 
 us_counties <- tidycensus::county_laea
   # preloaded county geometry; hopefully doesn't cause any issues
+
+  # trying to remember if we can just use data from `modobj` 
 
 # Baseline mortality data for >=65 (should double check if there are any later versions)
 counties_mort_65 <- read_tsv("01_data/all_cause_mortality_65_plus_county.txt") %>%
