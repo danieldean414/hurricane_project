@@ -106,7 +106,7 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
   mutate(year_set = cumsum(change)) %>%
   #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
   dplyr::select(-change) %>%
-  mutate(us_contact = (longitude < 290 & latitude > 25)) %>%
+  mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%
   group_by(year, tc_number, year_set) %>%
   dplyr::filter(sum(landfall) > 1) %>%
@@ -118,6 +118,8 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
              cross_sum == 0) &
            !(us_contact == FALSE &
                cross_sum == max_cross_sum)) %>%
+  add_tally() %>%
+  filter(n > 2) %>%
   #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
   ungroup() %>%
   mutate(year = year + 1,
@@ -131,7 +133,8 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
                                   pad = 0),
                           year_set,
                           sep = "-"),
-         wind = max_wind_speed / 1.852 # converting km/h to knots
+         #wind = max_wind_speed / 1.852 # converting km/h to knots
+         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
   ) %>% 
   mutate(date = 
            paste0(str_pad(year, width = 4, side = "left", pad = 0),
@@ -140,8 +143,57 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
                   str_pad(hour, width = 2, side = "left", pad = 0),
                   "00"
                   
-           ),
-         longitude = longitude -360) %>%# also seems to work as-is?
+           )) %>% #,
+         #longitude = longitude -360) %>%# also seems to work as-is?
+  select(storm_id, date, latitude, longitude, wind)
+
+
+# Retaining all data
+storm_10k_obs_na_all_proc <- storm_10k_obs_na  %>%
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  dplyr::select(-change) %>%
+  #mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(year, tc_number, year_set) %>%
+  dplyr::filter(sum(landfall) > 1) %>%
+  #dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  #mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  #dplyr::mutate(cross_sum = cumsum(cross),
+  #              max_cross_sum = max(cross_sum)) %>%
+  #filter(!(us_contact == FALSE & 
+  #           cross_sum == 0) &
+  #         !(us_contact == FALSE &
+  #             cross_sum == max_cross_sum)) %>%
+  add_tally() %>%
+  filter(n > 2) %>%
+  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  ungroup() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          year_set,
+                          sep = "-"),
+         #wind = max_wind_speed / 1.852 # converting km/h to knots
+         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           )) %>% #,
+  #longitude = longitude -360) %>%# also seems to work as-is?
   select(storm_id, date, latitude, longitude, wind)
 
 # Alright, probably not the cleanest, but think I have the right years!
@@ -290,10 +342,11 @@ storm_25yr_sim_3hr <- storm_25yr_sim_raw %>%
 
 # counties (should default to 2020)
 
-us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) %>% # To avoid high-res versions
-  clean_names()
+#us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) %>% # To avoid high-res versions
+#  clean_names()
 
-us_counties <- tidycensus::county_laea
+us_counties <- tidycensus::county_laea # need to add the `area` column, but otherwise OK
+  # check default unit there; I think it's still m^2
   # preloaded county geometry; hopefully doesn't cause any issues
 
   # trying to remember if we can just use data from `modobj` 
@@ -335,7 +388,7 @@ counties_mort_65 <- read_tsv("01_data/all_cause_mortality_65_plus_county.txt") %
 #tidycensus::load_variables(year = 2020, dataset = 'pl')
   # not sure if I'm missing something, but looks like they don't have full data, so stick with ACS5?
 
-acs_vars <- read.xlsx("01_data/ACS2019_Table_Shells.xlsx")
+acs_vars <- read_xlsx("01_data/ACS2019_Table_Shells.xlsx")
 
 age_pct_65_plus_ids <- acs_vars %>%
   clean_names() %>%
@@ -367,17 +420,20 @@ county_acs_vars <- tidycensus::get_acs(geography = 'county',
                                        geometry = FALSE)
 coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE, startRow = 3) %>% clean_names()
 
+save(county_acs_vars, file = "01_data/county_acs_vars.rda") # just in case I need to reload offline
 
 ### Temporary (maybe load from a separate, earlier file)
   # Oh, this is just the estimate for # exposures; so *could* keep from historical data
 
 exposure_draft1 <- hurricaneexposuredata::storm_winds %>% 
   mutate(storm_year = str_extract_all(storm_id, "[0-9]{4}")) %>%
-  filter(storm_year %in% c(1999:2020) & vmax_sust > 20) %>% # double-check that this aligns with current model
+  filter(storm_year %in% c(1999:2020) & vmax_sust > 17.4) %>% # double-check that this aligns with current model
   select(fips, storm_id) %>%
   unique() %>%
   group_by(fips) %>%
   dplyr::summarize(exposure = n())
+
+  # need to decide how to handle 
 
 ###
   # adding an extra variable for actual population age 65+; don't think that should cause any issues
@@ -406,8 +462,9 @@ county_acs_vars_bayesian <- county_acs_vars %>%
          no_grad_prop = B06009_002 / B06009_001
   ) %>%
   left_join(clean_names(coastlines), by = c("GEOID" = "state_county_fips")) %>%
-  left_join(us_counties, by = c("GEOID" = "geoid")) %>%
-  mutate(population_density = B01001_001 / (aland * 0.00000038610), 
+  left_join(us_counties) %>% #, by = c("GEOID" = "geoid")) %>%
+  mutate(aland = as.numeric(st_area(geometry))) %>%
+  mutate(population_density = B01001_001 / (aland * 0.00000038610), # looks like m^2 --> miles^2
          coastal = as.numeric(!is.na(coastline_region)),
          year = 2015,
          #year = sample(2006:2015, size = 1, replace = T),
@@ -415,6 +472,13 @@ county_acs_vars_bayesian <- county_acs_vars %>%
   ) %>%
   left_join(exposure_draft1, by = c("GEOID" = "fips")) %>%
   select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value)
+
+  #!! Not sure how it will handle unexposed counties (exposure = NA); I guess a bit ~tautologically, only exposed counties
+    # are in the `modobj` dataset
+    # maybe filter out? Although seems possible that there'd be impacts on countied not in the 
+    # 1999-2015 window
+    # or bump up to one; arbitrary, but I'd guess 1 and 0 impacts would look similar?
+      # could put in '0', but don't know if that would cause extrapolation issues
 
 # last 3 lines are pulling in storm simulation data; I guess could run that 'upstream'
 

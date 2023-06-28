@@ -2,11 +2,6 @@
   # temporarily using a older, pre-processed set of storm data
     # CLIMADA date/time issues
 
-storm_10k_obs_50k <- storm_10k_obs[1:50000,] %>% # yeah, trying 50k rows out of the ~3.4 million
-  mutate(longitude = longitude - 360)
-
-storm_10k_obs_50k_split <- split(storm_10k_obs_50k,
-                                    f = storm_10k_obs_50k$storm_id)
 
 # seeing if the longitude format (seems to show degrees west as deg. east + west)
   # whereas the `floyd_tracks` dataset shows it as negative degrees east
@@ -19,12 +14,34 @@ storm_10k_obs_50k_split <- split(storm_10k_obs_50k,
 ####################################################################
 ####################################################################
 
+# trying the filtered NA/US within 1 degree; thinking I could compare specific storms to get a sense of accuracy
+  # full dataset seems to crash in ~3.5 hours (issue with `seq()` encoutering a non-finite value?)
+
+storm_10k_obs_na_test <- storm_10k_obs_na_proc[1:50000,]
+
+storm_10k_obs_na_test_split <- split(storm_10k_obs_na_test,
+                                     f = storm_10k_obs_na_test$storm_id)
+
+start <- Sys.time()#proc.time()
+cl <- makeCluster(7) # 8 for ~full utilization
+storm_10k_obs_na_test_split_ggw <- parLapply(cl,
+                                           (storm_10k_obs_na_test_split[1:50000]),
+                                           get_grid_winds)
+stopCluster(cl)
+end <- Sys.time() #proc.time()
+print(end - start) 
+
+time_na <- end-start
+
+storm_10k_obs_na_test_ggw <- do.call("rbind", storm_10k_obs_na_test_split_ggw)
+
 
 # Setting up parameters for parallel run:
 # Realized I need to comment out to make it practical to run/render
 
+ncores <- detectCores()
 start <- proc.time()
-cl <- makeCluster(6) # 8 for ~full utilization
+cl <- makeCluster(ncores-1) # 8 for ~full utilization
 storm_winds_storm_10k_obs_leg_lon_50k <- parLapply(cl,
                                    (storm_10k_obs_50k_split),
                                   get_grid_winds)
@@ -48,10 +65,10 @@ storm_winds_storm_10k_obs_leg_lon_50k_comb <- do.call("rbind", storm_winds_storm
         # maybe there's a minimum windspeed?
         # Noticing the NA's are for certain gridid's (FIPS), so maybe that's the output for non-exosed areas?
         # specific column is `date_time_max_wind`; might be significant
-storm_10k_obs <- storm_10k_obs_na_proc %>%
-  add_count(storm_id) %>% 
+#storm_10k_obs <- storm_10k_obs_na_proc %>%
+#  add_count(storm_id) %>% 
 #  filter(n > 2) %>% # not sure if there's a functional minimum
-  dplyr::select(-n)
+#  dplyr::select(-n)
   # from looking around, causes for the error I'm getting could be at least one of:
     # too few points to interpolate
     # wrong order for e.g. dates -- seems unlikely sans e.g. bracketing issue
@@ -69,8 +86,14 @@ storm_10k_obs_split <- split(storm_10k_obs,
 us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
 us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
+# taking a weirdly long time; trying with 50k rows again...
 
+storm_10k_obs_split_try3 <- split(storm_10k_obs[100000:nrow(storm_10k_obs),],
+                             f = (storm_10k_obs[100000:nrow(storm_10k_obs),])$storm_id)
 
+storm_10k_obs_na_split <- split(storm_10k_obs_na_proc,
+                                f = (storm_10k_obs_na_proc)$storm_id)
+  
 # trying to think if there's an efficient way to check for boundary overlaps
   # e.g. maybe a lot of NA storms just don't clip the US?
 
@@ -86,16 +109,18 @@ us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 # Setting up parameters for parallel run:
 # Realized I need to comment out to make it practical to run/render
 
-start <- proc.time()
-cl <- makeCluster(6) # 8 for ~full utilization
-storm_winds_storm_10k_obs <- parLapply(cl,
-                                           (storm_10k_obs_split),
+start <- Sys.time()#proc.time()
+cl <- makeCluster(7) # 8 for ~full utilization
+storm_10k_obs_na_split_winds3 <- parLapply(cl,
+                                           (storm_10k_obs_split_try3),
                                            get_grid_winds)
 stopCluster(cl)
-end <- proc.time()
+end <- Sys.time() #proc.time()
 print(end - start) 
 
-storm_winds_storm_10k_obs_comb <- do.call("rbind", storm_winds_storm_10k_obs)
+time_50k <- end-start
+
+storm_10k_obs_na_split_winds3 <- do.call("rbind", storm_10k_obs_na_split_winds3)
 
 
 # argh, keep hitting that same issue; tempted to try running a loop to see where it breaks?

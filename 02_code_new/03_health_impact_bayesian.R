@@ -6,10 +6,29 @@
 test_bayesian_data <- (hurricaneexposuredata::storm_winds %>% 
                          left_join(county_acs_vars_bayesian, 
                                    by = c("fips" = "GEOID")))
+##########
 
-test_bayesian <- predict(modobj, newdata = (test_bayesian_data %>% filter(!is.na(median_house_value))))
-  # OK, no strucutre as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
+## replacing w/ some of the locally-processed STORM data:
+test_bayesian_data <- storm_winds_storm_10k_obs_leg_lon_50k_comb %>%
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
+  filter(!is.na(date_time_max_wind))  %>%
+  left_join(county_acs_vars_bayesian, 
+            by = c("gridid" = "GEOID"))
 
+# testing 1:100 for a sense of timing; coincidentally no NA's but need to addres longer-term
+  # missing the `storm_id` present in the example data
+  # Oh, I think there's a way 
+
+Sys.time()
+test_bayesian <- predict(modobj, newdata = (test_bayesian_data[1:100,]) )
+  # OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
+  # ohh, still NAs for things like median income, etc.; I remember this is a concern
+Sys.time()
+
+# Well, on the bright side, runs pretty much instantaneously with 100 rows;
+  # output is 47000 numbers; I guess 470 per row? seems like an odd 'default' number
+  
 
 test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data[13,]))
   # 1000 ~rows (trying to remember how to handle--do you do summary statistics?)
@@ -19,7 +38,7 @@ test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data[13,]))
 
 test_bayesian_rowwise <- test_bayesian_data %>%
   filter(vmax_sust >= 17.4) %>%
-  group_by(fips, storm_id) %>%
+  group_by(gridid, storm_id) %>%
   nest() %>%
   mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )#,
          #impact_summary = purrr::map(.x = impact, .f = ~summary(unlist(.x))))
@@ -33,6 +52,7 @@ test_bayesian_rowwise_summarized <- test_bayesian_data %>%
          impact_median = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.5))),
          impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
 
+  # huh, no storm_id in my version
   # oh, adding a summary step seems to make the runtime a lot longer...
 
 test_df <- test_bayesian_rowwise_summarized %>%
