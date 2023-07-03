@@ -9,7 +9,7 @@ test_bayesian_data <- (hurricaneexposuredata::storm_winds %>%
 ##########
 
 ## replacing w/ some of the locally-processed STORM data:
-test_bayesian_data <- storm_winds_storm_10k_obs_leg_lon_50k_comb %>%
+test_bayesian_data <- storm_10k_obs_na_proc_ggw %>%
   rownames_to_column("storm_id") %>%
   mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
   filter(!is.na(date_time_max_wind))  %>%
@@ -43,22 +43,69 @@ test_bayesian_rowwise <- test_bayesian_data %>%
   mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )#,
          #impact_summary = purrr::map(.x = impact, .f = ~summary(unlist(.x))))
 
+# OK, a little risky, but I *think* Na/zero-row results are just where the storm doesn't hit that county
+  # Would it follow that each storm will have all ~3000ish counties, then?
+
+  # no--everywhere from 1-2 to hundreds of counties:
+test_bayesian_rowwise %>%
+  ungroup() %>%
+  group_by(storm_id) %>%
+  tally() %>%
+  summary()
+
+## Huh, so then what *do* NA's mean here?
+  # maybe something w/ filtering to min. windspeeds on the basis of exposures?
+
 test_bayesian_rowwise_summarized <- test_bayesian_data %>%
   filter(vmax_sust >= 17.4) %>%
-  group_by(fips, storm_id) %>%
+  group_by(gridid, storm_id) %>%
   nest() %>%
   mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)),
          impact_lower = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.025))),
          impact_median = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.5))),
          impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
 
+############################################################3
+#  trying to work out why there are NAs
+ggplot() +
+  geom_sf(aes(fill = impact_median,
+              geometry = geometry),
+          data = test_bayesian_rowwise_summarized %>%
+            unnest(impact_median) %>% 
+            filter(storm_id == "0-0002-0") %>%
+            left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))) +
+  geom_sf(aes(  geometry = geometry, color = wind), 
+          data = (storm_10k_obs_na_proc_split$`0-0002-0` %>%
+                    mutate(longitude = longitude - 360) %>%
+                    st_as_sf(coords = c('longitude', 'latitude'),
+                             crs = "WGS84"))) +
+  scale_color_viridis_c(option = 'plasma') +
+  scale_fill_viridis_c(option = "mako") + 
+  theme_void()
+
+  # not too enlightening; not sure why those ones are NA's vs ~0 like the other peripheral counties
+
+storm_ids_na <- test_bayesian_rowwise_summarized %>%
+  dplyr::select(-impact, -data) %>% 
+  unnest(impact_lower:impact_upper) %>%
+  filter(is.na(impact_median)) %>%
+  dplyr::select(storm_id)
+
+# 545  unique storms with"NA" values:
+storm_ids_na %>% ungroup() %>% dplyr::select(storm_id) %>% unique() %>% dim()
+# for some reason apparently only 471 matching?? 
+storm_10k_obs_na_proc %>% filter(storm_id %in% storm_ids_na$storm_id) %>%
+  dplyr::select(storm_id) %>% unique() %>% dim()
+
+###############################################################
+
   # huh, no storm_id in my version
   # oh, adding a summary step seems to make the runtime a lot longer...
 
 test_df <- test_bayesian_rowwise_summarized %>%
-  unnest(impact_lower, impact_median, impact_upper) %>%
+  unnest(c(impact_lower, impact_median, impact_upper)) %>%
   ungroup() %>%
-  group_by(fips) %>% 
+  group_by(gridid) %>% 
   dplyr::summarize(impact_median_median = median(impact_median, na.rm = T),
                    impact_lower_median = median(impact_lower, na.rm = T), 
                    impact_upper_median = median(impact_upper, na.rm = T))
@@ -66,7 +113,7 @@ test_df <- test_bayesian_rowwise_summarized %>%
 
 test_df %>% 
   filter(!is.na(impact_median_median)) %>%
-  left_join(county_acs_vars_bayesian, by = c("fips" = "GEOID")) %>%
+  left_join(county_acs_vars_bayesian, by = c("gridid" = "GEOID")) %>%
   ggplot() +
   aes(geometry =geometry)
 

@@ -1,7 +1,7 @@
 ########### libraries
 
 library(tidyverse)
-library(tigris)
+#library(tigris)
 library(tidycensus)
 library(ggplot2)
 library(janitor)
@@ -13,15 +13,15 @@ library(stormwindmodel)
 library(sf)
 #devtools::install_github("geanders/stormwindmodel", build_vignettes = TRUE) # latest version
 library(openxlsx)
-library(splines)
-library(plyr)
+#library(splines)
+#library(plyr)
 library(hurricaneexposuredata)
 
 
-library(ncdf4)
-library(ncdf4.helpers)
-library(PCICt)
-library(tidyverse)
+#library(ncdf4)
+#library(ncdf4.helpers)
+#library(PCICt)
+
 
 ########## Data
 
@@ -29,14 +29,14 @@ library(tidyverse)
 
 # Adding Alice's list of ENSO categorizations
 
-enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
-  pivot_longer(cols = 1:3, names_to = "phase", values_to = "year") %>% # right term?
-  filter(!is.na('value'))  # for some reason only works w/ 'value' in qoutes?
+#enso_years <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "A1:C36") %>%
+#  pivot_longer(cols = 1:3, names_to = "phase", values_to = "year") %>% # right term?
+#  filter(!is.na('value'))  # for some reason only works w/ 'value' in qoutes?
 
 # not sure if we'd need exact ONI values, but 
 
-enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71") %>%
-  clean_names()
+#enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71") %>%
+#  clean_names()
 
 # **  Using old data for now--issues w/ date-time agreement in CLIMADA output
 
@@ -80,6 +80,15 @@ storm_names <- c('year', 'month', 'tc_number', 'time_step',
 
 storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
                                  full.names = TRUE, pattern = ".*NA.*") 
+
+
+###########################################################################
+########## OK, need to work out issues with R env. on ALPINE;
+  # let's use say 1000 years for now?
+
+storm_10k_obs_list <- storm_10k_obs_list[1]
+
+#############################################################################
 
   # Wow, was forgetting to pre-filter to North Atlantic!
     # still too big to read in with a direct call, but loop might work now...
@@ -418,9 +427,56 @@ county_acs_vars <- tidycensus::get_acs(geography = 'county',
                                        year = 2020,
                                        survey = "acs5",
                                        geometry = FALSE)
-coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE, startRow = 3) %>% clean_names()
+  # did I delete a line here? Piped straight into the saving step
 
 save(county_acs_vars, file = "01_data/county_acs_vars.rda") # just in case I need to reload offline
+
+coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE, startRow = 3) %>% clean_names()
+
+
+#####################################################################################################
+  ## Probably could remove ~functionally, but could be useful for methods
+
+# Adding a step to help keep track of where all the 'NA' results are coming from downstream
+  # *possible* it's just replication of these
+# variables are:
+  # B06009_001/2: used to estimate % with HS degree
+  # B06012_001/2: % below poverty
+  # B07013_1/2: % in ownder-occupied housing
+  # B25077: Median housing value (USD)
+
+#######################################333
+
+
+# OK, let's remove those and see if that stops the propagation of NAs
+
+us_counties %>% mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>% ggplot() + aes(geometry = geometry, fill = missing_data) %>% geom_sf(color = NA) + theme_void() 
+
+county_acs_vars_na <- county_acs_vars %>% filter(is.na(estimate))
+county_acs_vars_moe_na <- county_acs_vars %>% filter(is.na(moe))
+
+# OK, 78 missing counties for everything but B25077_001, which only has 5 missing
+
+
+# That's odd--so I see the 78 unique IDs for missing data
+unique(county_acs_vars_na$GEOID)
+# but if I try matching it to `us_counties`, I only get 5:
+us_counties %>% 
+  mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>%
+  filter(missing_data == TRUE)
+
+# ohh-that makes sense; it's that the majority are Puerto Rico's counties
+# mapping remaining counties--looks like 4 in continental US, maybe 1 that's realistically exposed 
+
+# ~non-territorial US counties are:
+# Kalawao County, Hawaii 
+# Buffalo County, South Dakota: pop 1,948       
+# Mellette County, South Dakota: pop 1,918
+# Kenedy County, Texas: pop ~350
+# Loving County, Texas: pop ~64
+
+#######################################################################################
+#######################################################################################
 
 ### Temporary (maybe load from a separate, earlier file)
   # Oh, this is just the estimate for # exposures; so *could* keep from historical data
@@ -431,13 +487,15 @@ exposure_draft1 <- hurricaneexposuredata::storm_winds %>%
   select(fips, storm_id) %>%
   unique() %>%
   group_by(fips) %>%
-  dplyr::summarize(exposure = n())
+  dplyr::summarize(exposure = n()) %>%
+  mutate(exposure = replace_na(exposure, 1)) # maybe 0? Also out of training data's range
 
   # need to decide how to handle 
 
 ###
   # adding an extra variable for actual population age 65+; don't think that should cause any issues
 county_acs_vars_bayesian <- county_acs_vars %>%
+  filter(!is.na(estimate)) %>%
   select(-moe) %>%
   pivot_wider(names_from = variable,
               values_from = estimate) %>%
@@ -462,16 +520,33 @@ county_acs_vars_bayesian <- county_acs_vars %>%
          no_grad_prop = B06009_002 / B06009_001
   ) %>%
   left_join(clean_names(coastlines), by = c("GEOID" = "state_county_fips")) %>%
-  left_join(us_counties) %>% #, by = c("GEOID" = "geoid")) %>%
+  inner_join(us_counties) %>% #, by = c("GEOID" = "geoid")) %>%
+  filter(!is.na(median_house_value)) %>%
   mutate(aland = as.numeric(st_area(geometry))) %>%
   mutate(population_density = B01001_001 / (aland * 0.00000038610), # looks like m^2 --> miles^2
          coastal = as.numeric(!is.na(coastline_region)),
-         year = 2015,
+         year = 2015, # why is year 2015?
          #year = sample(2006:2015, size = 1, replace = T),
          #exposure = median(modobj$data$exposure)) %>%
   ) %>%
   left_join(exposure_draft1, by = c("GEOID" = "fips")) %>%
   select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value)
+
+# Huh--somehow gives a few "infinite" population densities; maybe 0 people??
+  # *Still 5 NA's for median house vale, 78 for no_grad_pop, etc.
+  # so still getting those NA's; make sure I saved filtered version 
+    # might be pulling in somewhere else?
+    # oh, maybe it's that those values are *missing* 
+
+# Using a `right_join` operation yeilds up to 9 NAs; 4 for most
+  # All dated 2015
+
+# 46113: ~retired code for Shannon County, SD (FIPS code = 46113); 
+  # renamed to Oglala Lakota County (FIPS 46102).          
+# 51515: Bedford City County, VA
+# 02261: Valdez-Cordova County, AK        
+# 02270: Wade Hampton Census Area 02270 FIPS Code, Alaska 
+  # possibly renamed to Kusilvak?
 
   #!! Not sure how it will handle unexposed counties (exposure = NA); I guess a bit ~tautologically, only exposed counties
     # are in the `modobj` dataset

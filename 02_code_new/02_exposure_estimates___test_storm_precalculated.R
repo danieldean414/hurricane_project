@@ -17,15 +17,13 @@
 # trying the filtered NA/US within 1 degree; thinking I could compare specific storms to get a sense of accuracy
   # full dataset seems to crash in ~3.5 hours (issue with `seq()` encoutering a non-finite value?)
 
-storm_10k_obs_na_test <- storm_10k_obs_na_proc[1:50000,]
-
-storm_10k_obs_na_test_split <- split(storm_10k_obs_na_test,
-                                     f = storm_10k_obs_na_test$storm_id)
+storm_10k_obs_na_proc_split <- split(storm_10k_obs_na_proc,
+                                     f = storm_10k_obs_na_proc$storm_id)
 
 start <- Sys.time()#proc.time()
 cl <- makeCluster(7) # 8 for ~full utilization
-storm_10k_obs_na_test_split_ggw <- parLapply(cl,
-                                           (storm_10k_obs_na_test_split[1:50000]),
+storm_10k_obs_na_proc_split_ggw <- parLapply(cl,
+                                           (storm_10k_obs_na_proc_split),
                                            get_grid_winds)
 stopCluster(cl)
 end <- Sys.time() #proc.time()
@@ -33,8 +31,37 @@ print(end - start)
 
 time_na <- end-start
 
-storm_10k_obs_na_test_ggw <- do.call("rbind", storm_10k_obs_na_test_split_ggw)
+Sys.time()
+storm_10k_obs_na_proc_ggw <- do.call("rbind", storm_10k_obs_na_proc_split_ggw)
+Sys.time()
+  # ran for ~2 hours before crashing (cannot allocate vector of size 19 Kb)
+    # maybe missed it, but session was only at ~2.8 Gb
 
+storm_10k_obs_na_all_proc <- storm_10k_obs_na_all_proc %>%
+  add_tally() %>%
+  filter(n > 3) # doubt it's this simple, but worth a shot
+
+
+storm_10k_obs_na_all_proc_split <- split(storm_10k_obs_na_all_proc,
+                                     f = storm_10k_obs_na_all_proc$storm_id)
+
+start <- Sys.time()#proc.time()
+cl <- makeCluster(7) # 8 for ~full utilization
+storm_10k_obs_na_all_proc_split_ggw <- parLapply(cl,
+                                             (storm_10k_obs_na_all_proc_split),
+                                             get_grid_winds)
+stopCluster(cl)
+end <- Sys.time() #proc.time()
+print(end - start) 
+
+time_na <- end-start
+
+Sys.time()
+storm_10k_obs_na_all_proc_ggw <- do.call("rbind", storm_10k_obs_na_all_proc_split_ggw)
+Sys.time()
+
+
+####################3
 
 # Setting up parameters for parallel run:
 # Realized I need to comment out to make it practical to run/render
@@ -144,9 +171,15 @@ for(storm in storm_10k_obs_split){
 
 
 
-storm_counties <- storm_10k_obs_winds_comb$gridid %>% unique()
+storm_counties <- storm_10k_obs_na_proc_ggw$gridid %>% unique()
+# number of counties:
+storm_10k_obs_na_proc_ggw$gridid %>% unique() %>% length()
 
+# checking county traits with variables
+  # doesn't have populations yet...
+county_acs_vars_bayesian %>% filter(GEOID %in% storm_counties)
 
+#############3
 us_counties_wgs84 %>%
   filter(GEOID %in% storm_counties) %>%
   ggplot() +
@@ -165,7 +198,21 @@ ggplot() +
                             crs = "WGS84"))$geometry)
   ))
 
-# OK, 
+# OK, (jumping ahead), trying to plot storms giving 'NA' results against counties
+  # I wonder if there'd be a way to give storm + county combinations
+
+ggplot() +
+  geom_sf(aes(
+    geometry = (us_counties_wgs84 %>%
+                  filter(GEOID %in% storm_counties))$geometry
+  )) +
+  geom_sf(aes(
+    geometry = geometry,
+    color = wind
+  ), data = (((storm_10k_obs_na_proc %>% filter(storm_id %in% storm_ids_na$storm_id)) %>%
+                mutate(longitude = longitude -360) %>%
+                st_as_sf(coords = c('longitude', 'latitude'), 
+                         crs = "WGS84"))))
 
 #well, that didn't take long! 
 # user  system elapsed 

@@ -126,7 +126,7 @@ county_acs_vars_bayesian <- county_acs_vars %>%
          ) %>%
   left_join(clean_names(coastlines), by = c("GEOID" = "state_county_fips")) %>%
   left_join(us_counties, by = "GEOID") %>%
-  mutate(population_density = B01001_001 / (ALAND * 0.00000038610), 
+  mutate(population_density = B01001_001 / (ALAND * 0.00000038610),  # looks like m^2 --> miles^2
     coastal = as.numeric(!is.na(coastline_region)),
     year = 2015,
     #year = sample(2006:2015, size = 1, replace = T),
