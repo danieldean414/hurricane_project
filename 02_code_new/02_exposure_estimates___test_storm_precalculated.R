@@ -14,6 +14,17 @@
 ####################################################################
 ####################################################################
 
+# Decided to add 'historical' data as a point of reference
+  # either of ~primary interest, or as more of a ~supplemental thing
+
+
+
+# trying the filtered NA/US within 1 degree; thinking I could compare specific storms to get a sense of accuracy
+# full dataset seems to crash in ~3.5 hours (issue with `seq()` encoutering a non-finite value?)
+
+
+#########3
+
 # trying the filtered NA/US within 1 degree; thinking I could compare specific storms to get a sense of accuracy
   # full dataset seems to crash in ~3.5 hours (issue with `seq()` encoutering a non-finite value?)
 
@@ -39,8 +50,8 @@ Sys.time()
 
 storm_10k_obs_na_all_proc <- storm_10k_obs_na_all_proc %>%
   add_tally() %>%
-  filter(n > 3) # doubt it's this simple, but worth a shot
-
+  filter(n > 3) %>% # doubt it's this simple, but worth a shot
+  dplyr::select(-n)
 
 storm_10k_obs_na_all_proc_split <- split(storm_10k_obs_na_all_proc,
                                      f = storm_10k_obs_na_all_proc$storm_id)
@@ -109,9 +120,6 @@ storm_10k_obs_split <- split(storm_10k_obs,
 
 # trying to figure out which CRS to use
   # either WGS84  or NAD83 , probably
-
-us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
-us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
 # taking a weirdly long time; trying with 50k rows again...
 
@@ -245,54 +253,3 @@ storm_winds_25yr3h_grid_comb <- storm_winds_25yr3h_grid_comb %>%
 ##  vmax_sust: modeled maximum sustained wind speed at the population centroid of the county during the TC in m/s (from hurricaneexposuredata package)
 ##  sust_dur: duration of sustained wind speeds above 20 m/s at the population centroid of the county during the TC (from hurricaneexposuredata package)
 
-
-tc_merged_data <- storm_winds_25yr3h_grid_comb %>% 
-  left_join(county_acs_vars_bayesian, by = c('gridid' = 'GEOID'))
-
-# 199 NAs in most cases (presumably limited by census data) <-- ~600 NAs for median housing value
-  # HOWEVER, **~344k**  NA's for `exposure` 
-    # might be that a lot of non-exposed counties are included, plus replication
-    # but should check that approach makes sense
-    # Also ~72k NAs for population density
-
-tc_merged_data$gridid %>% table()
-# 199 versions of each county (by FIPS)
-  # multiplied by # of storm IDs in this data set
-  # trying to think through how to efficiently vet whether the results make sense
-    # e.g. at some point should apply a lower threshold
-
-
-
-
-
-########################################################3
-# Example plots: 
-  # maybe best to have in a separate plotting/visualizaiton file
-
-
-# Mean winds
-tc_merged_data %>%
-  group_by(gridid) %>%
-  dplyr::summarize(mean_windspeed = mean(vmax_sust)) %>%
-  left_join(us_counties, by = c("gridid" = 'GEOID')) %>%
-  ggplot() +
-  aes(fill = mean_windspeed, geometry = geometry) +
-  geom_sf() +
-  theme_minimal() + 
-  scale_fill_viridis_c(option = 'magma') +
-  labs(fill = "Windspeed (m/s)",
-       title = "Mean Sustained Windspeed (m/s) in 25y Simulation")
-
-# max winds [useful?]
-
-tc_merged_data %>%
-  group_by(gridid) %>%
-  dplyr::summarize(mean_windspeed = max(vmax_sust)) %>%
-  left_join(us_counties, by = c("gridid" = 'GEOID')) %>%
-  ggplot() +
-  aes(fill = mean_windspeed, geometry = geometry) +
-  geom_sf() +
-  theme_minimal() +
-  scale_fill_viridis_c(option = 'magma') + 
-  labs(fill = "Windspeed (m/s)",
-       title = "Maximum Sustained Windspeed (m/s) in 25y Simulation")

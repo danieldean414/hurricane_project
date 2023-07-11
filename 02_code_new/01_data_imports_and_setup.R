@@ -25,6 +25,24 @@ library(hurricaneexposuredata)
 
 ########## Data
 
+# Counties -- moving up so I can filter by geometry
+
+us_counties <- tidycensus::county_laea # need to add the `area` column, but otherwise OK
+# check default unit there; I think it's still m^2
+# preloaded county geometry; hopefully doesn't cause any issues
+
+# trying to remember if we can just use data from `modobj` 
+
+
+us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
+us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
+
+sf_use_s2(FALSE) # turns off spherical geometry; apparently causing issues /w buffer?
+
+us_counties_wgs84_merged_buffer <- us_counties_wgs84 %>%
+  st_union() %>%
+  st_buffer(dist = (250 / 111.32)) # arc degree by default; these are 111.32 km
+
 ############## Netcdf4 data (hurricane simulation output)
 
 # Adding Alice's list of ENSO categorizations
@@ -81,12 +99,16 @@ storm_names <- c('year', 'month', 'tc_number', 'time_step',
 storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
                                  full.names = TRUE, pattern = ".*NA.*") 
 
+# trying one of the climate change models
+storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
+                                 full.names = TRUE, pattern = ".*NA.*") 
 
 ###########################################################################
 ########## OK, need to work out issues with R env. on ALPINE;
   # let's use say 1000 years for now?
 
-storm_10k_obs_list <- storm_10k_obs_list[1]
+storm_10k_obs_list <- storm_10k_obs_list[9]
+  # trying next 1000 to see how similar the subsets are
 
 #############################################################################
 
@@ -107,6 +129,74 @@ storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
 #storm_10k_obs_na <- dplyr::bind_rows(read_csv(storm_10k_obs_list, col_names = FALSE), .id = 'year_set')
   # oh, turns out `rbind` is superfluous, so already just one dataframe
 
+## Setting up a new version:
+  #-prefiltering to 64 knots and/or 32.9 m/s (reach at least this speed)
+  # Hoenstly just that might drop it to a manageable amount
+  # and then either use st_as_sf() + buffer, or some kind of bounding box 
+    # any way to get diagnonals, etc., w/o geometry?
+
+names(storm_10k_obs_na) <- storm_names
+
+# OK, even w/ a lot of extra storms off to SE, hurricanes + <=250km cuts it down to ~10% of orig. 
+storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  dplyr::select(-change) %>%
+  group_by(year, tc_number, year_set) %>%
+  mutate(max_max_wind_speed = max(max_wind_speed)) %>%
+  filter(max_max_wind_speed >= 32.9) %>% 
+  mutate(longitude = longitude - 360) %>%
+  #st_as_sf(coords = c('longitude', 'latitude'),
+  #         crs = "WGS84") %>%
+  #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
+  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84)$xmax + (250 / 111.32) &
+                         latitude > st_bbox(us_counties_wgs84)$ymin - (250 / 111.32))) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(year, tc_number, year_set) %>%
+  dplyr::filter(sum(landfall) > 1) %>%
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
+  add_tally() %>%
+  filter(n > 2) %>%
+  filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  ungroup() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          year_set,
+                          sep = "-"),
+         #wind = max_wind_speed / 1.852 # converting km/h to knots
+         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           )) %>% #,
+  #longitude = longitude -360) %>%# also seems to work as-is?
+  #select(storm_id, date, latitude, longitude, wind)
+  select(storm_id, date, wind, latitude, longitude) # not sure if this will cause problems
+
+#st_intersection(storm_10k_obs_na_proc_hurricane, st_buffer(us_counties_wgs84, ))
+
+#########################3
 names(storm_10k_obs_na) <- storm_names
 
 storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
@@ -211,137 +301,6 @@ storm_10k_obs_na_all_proc <- storm_10k_obs_na  %>%
 # OK, think I can remove the rest of the hurricane data
   # *do* need to keep the county data, etc.
 ###########################################################################################################
-#REMOVE BETWEEN HERE AND ~276
-
-
-# Pulling up processing step to save storage size (might still be too much  'active' memory)
-  # not thinking of a non-loop approach at the moment...
-
-#storm_10k_obs_template <- data.frame(matrix(ncol = 13, nrow = 0))
-storm_10k_obs_template <- data.frame(matrix(ncol = 5, nrow  = 0))
-names(storm_10k_obs_template) <- c("storm_id", "date","latitude",
-                                   "longitude", "wind")
-
-storm_10k_obs <- storm_10k_obs_template
-
-for(file in storm_10k_obs_list){
-  readin_tmp <- read_csv(file, col_names = FALSE)
-  names(readin_tmp) <- storm_names
-  
-  processed <- readin_tmp %>%
-    mutate(year = year + 1,
-           #hours_base = timestep_3_hourly * 3,
-           hours_base = time_step * 3,
-           hour = hours_base %% 24,
-           day = ((hours_base - hour) / 24) + 1,
-           storm_id = paste(tc_number,
-                            str_pad(year, width = 4,
-                                    side = "left",
-                                    pad = 0),
-                            sep = "-"),
-           wind = max_wind_speed / 1.852 # converting km/h to knots
-    ) %>% 
-    mutate(date = 
-             paste0(str_pad(year, width = 4, side = "left", pad = 0),
-                    str_pad(month, width = 2, side = "left", pad = 0),
-                    str_pad(day, width = 2, side = "left", pad = 0),
-                    str_pad(hour, width = 2, side = "left", pad = 0),
-                    "00"
-                    
-             )) %>%
-    select(storm_id, date, latitude, longitude, wind)
-  
-  storm_10k_obs <- rbind(storm_10k_obs, processed)
-  print(file)
-}
-  #OK, hit a memory error; should have included some print function to get file #!
-  # 16,617,679 rows, so 33ish files
-
-# Weird, after prefiltering to NA, still crashed after only ~1 million rows!
-
-# OK, should be able to feed into existing steps now
-  # oh, feeling like setting up on server is definitely seeming plausible
-    # yeah, already up to ~2 GB *just loading* 1/6 of the ~pseudo-historical files
-
-# shouldn't need major modifications;
-
-
-storm_10k_obs_test_3hr <- storm_10k_obs_test %>%
-  clean_names() %>%
-  mutate(year = year + 1,
-         #hours_base = timestep_3_hourly * 3,
-         hours_base = time_step * 3,
-         hour = hours_base %% 24,
-         day = ((hours_base - hour) / 24) + 1,
-         storm_id = paste(tc_number,
-                          str_pad(year, width = 4,
-                                  side = "left",
-                                  pad = 0),
-                          sep = "-"),
-         wind = max_wind_speed / 1.852 # converting km/h to knots
-  ) %>% 
-  mutate(date = 
-           paste0(str_pad(year, width = 4, side = "left", pad = 0),
-                  str_pad(month, width = 2, side = "left", pad = 0),
-                  str_pad(day, width = 2, side = "left", pad = 0),
-                  str_pad(hour, width = 2, side = "left", pad = 0),
-                  "00"
-                  
-           )) %>%
-  select(storm_id, date, latitude, longitude, wind)
-
-# Oh, wow! No wonder there are issues! ~5 million rows just here!
-    # so would be ~~12 Gb RAM alltogether
-    # so ~30 million to process 
-  # I wonder how much memory each row holds? b/c 'procesed' version is 5 vs 13 cols 
-    # e.g. maybe could process and discard each file and only merge outputs?
-  # Oh, learned a new function!
-    # object.size()
-      # 525366860 bytes (~500 Mb) for 'raw' version, 191257904 (<200 Kb) for above output 
-      # oh, so that *is* an appreciable difference! Could fit 2.7x the rows of 'processed' data
-        # so ~45%/~4500 years
-        # and keep in mind I have >700 Mb between the 2 at ~2 Gb system memory ,so not untenable
-########
-
-  # CHAZ--organized in figure-based .nc files
-
-
-############# REPLACE WITH EITHER CLIMADA OR CHAZ DATA ONCE DATES ARE RESOLVED
-
-
-#storm_25yr_sim_raw <- read_csv("../../Downloads/STORM_25_years.csv")
-storm_25yr_sim_raw <- read_csv("01_data/STORM_25_years.csv")
-# based on headers, already in knots this time
-
-storm_25yr_sim_3hr <- storm_25yr_sim_raw %>%
-  clean_names() %>%
-  mutate(year = year + 1,
-         #hours_base = timestep_3_hourly * 3,
-         hours_base = timestep_3_hourly * 3,
-         hour = hours_base %% 24,
-         day = ((hours_base - hour) / 24) + 1,
-         storm_id = paste(storm_number,
-                          str_pad(year, width = 4,
-                                  side = "left",
-                                  pad = 0),
-                          sep = "-")
-         #wind = wind * 1.94384449 # converting to knots
-  ) %>% 
-  mutate(date = 
-           paste0(str_pad(year, width = 4, side = "left", pad = 0),
-                  str_pad(month, width = 2, side = "left", pad = 0),
-                  str_pad(day, width = 2, side = "left", pad = 0),
-                  str_pad(hour, width = 2, side = "left", pad = 0),
-                  "00"
-                  
-           )) %>%
-  rename(
-    "latitude" = "lat",
-    "longitude" = "lon",
-    "wind" = "max_wind_kt"
-  ) %>%
-  select(storm_id, date, latitude, longitude, wind)
-
 
 
 ###############################################################################################################
@@ -354,14 +313,10 @@ storm_25yr_sim_3hr <- storm_25yr_sim_raw %>%
 #us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) %>% # To avoid high-res versions
 #  clean_names()
 
-us_counties <- tidycensus::county_laea # need to add the `area` column, but otherwise OK
-  # check default unit there; I think it's still m^2
-  # preloaded county geometry; hopefully doesn't cause any issues
 
-  # trying to remember if we can just use data from `modobj` 
 
 # Baseline mortality data for >=65 (should double check if there are any later versions)
-counties_mort_65 <- read_tsv("01_data/all_cause_mortality_65_plus_county.txt") %>%
+counties_mort_65 <- read_tsv("01_data/Multiple Cause of Death, 2018-2021, Single Race_2019_only.txt") %>%
   dplyr::select(-Notes) %>%
   clean_names()
 
@@ -450,7 +405,8 @@ coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE,
 
 # OK, let's remove those and see if that stops the propagation of NAs
 
-us_counties %>% mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>% ggplot() + aes(geometry = geometry, fill = missing_data) %>% geom_sf(color = NA) + theme_void() 
+us_counties %>% mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>%
+  ggplot() + aes(geometry = geometry, fill = missing_data) %>% geom_sf(color = NA) + theme_void() 
 
 county_acs_vars_na <- county_acs_vars %>% filter(is.na(estimate))
 county_acs_vars_moe_na <- county_acs_vars %>% filter(is.na(moe))
@@ -469,7 +425,7 @@ us_counties %>%
 # mapping remaining counties--looks like 4 in continental US, maybe 1 that's realistically exposed 
 
 # ~non-territorial US counties are:
-# Kalawao County, Hawaii 
+# Kalawao County, Hawaii  (?)
 # Buffalo County, South Dakota: pop 1,948       
 # Mellette County, South Dakota: pop 1,918
 # Kenedy County, Texas: pop ~350
@@ -530,7 +486,8 @@ county_acs_vars_bayesian <- county_acs_vars %>%
          #exposure = median(modobj$data$exposure)) %>%
   ) %>%
   left_join(exposure_draft1, by = c("GEOID" = "fips")) %>%
-  select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value)
+  select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value) %>%
+  mutate(exposure = replace_na(exposure, 1))
 
 # Huh--somehow gives a few "infinite" population densities; maybe 0 people??
   # *Still 5 NA's for median house vale, 78 for no_grad_pop, etc.
@@ -559,9 +516,9 @@ county_acs_vars_bayesian <- county_acs_vars %>%
 
 # model object
 
-load("01_data/modobj.RData")
+load("02_code/modobj.RData")
 
-source("02_code/pred_function.R")
+source("02_code_new/pred_function.R")
   #both from Dr. Nethery
 
 

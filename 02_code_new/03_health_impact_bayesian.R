@@ -3,27 +3,42 @@
 #################################################################33
 
 # Using historical data
-test_bayesian_data <- (hurricaneexposuredata::storm_winds %>% 
+test_bayesian_data_hist <- (hurricaneexposuredata::storm_winds %>%  
                          left_join(county_acs_vars_bayesian, 
-                                   by = c("fips" = "GEOID")))
+                                   by = c("fips" = "GEOID"))) %>%
+  rename(gridid = fips) %>%
+  filter(!is.na(median_age))
+
+# why are there NAs in the historic data??
+  # I guess from the county data? <- OK, same 3 as before Kenedy, Loving, and that "retired" VA one
+    # don't remember them before, though
+
+Sys.time()
+test_bayesian_hist <- predict(modobj, newdata = (test_bayesian_data_hist) )
+# OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
+# ohh, still NAs for things like median income, etc.; I remember this is a concern
+Sys.time()
+
 ##########
 
 ## replacing w/ some of the locally-processed STORM data:
-test_bayesian_data <- storm_10k_obs_na_proc_ggw %>%
+test_bayesian_data_in <- storm_10k_obs_na_all_proc_ggw %>%
   rownames_to_column("storm_id") %>%
   mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
   filter(!is.na(date_time_max_wind))  %>%
   left_join(county_acs_vars_bayesian, 
-            by = c("gridid" = "GEOID"))
+            by = c("gridid" = "GEOID")) %>%
+  mutate(exposure = replace_na(exposure, 1)) %>%
+  filter(!is.na(median_house_value))
+      # the removed counties are Kenedy and Loving again (I guess rejoined w/ geography?)
+          # only median house value appears to be missing, though; wonder if e.g. interpolating would be a good alternative?
+        # plus Bedford City County, VA, which was folded into a larger county in 2015
 
-# testing 1:100 for a sense of timing; coincidentally no NA's but need to addres longer-term
-  # missing the `storm_id` present in the example data
-  # Oh, I think there's a way 
 
 Sys.time()
-test_bayesian <- predict(modobj, newdata = (test_bayesian_data[1:100,]) )
-  # OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
-  # ohh, still NAs for things like median income, etc.; I remember this is a concern
+test_bayesian <- predict(modobj, newdata = (test_bayesian_data_in) )
+# OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
+# ohh, still NAs for things like median income, etc.; I remember this is a concern
 Sys.time()
 
 # Well, on the bright side, runs pretty much instantaneously with 100 rows;
@@ -36,7 +51,7 @@ test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data[13,]))
 
 # OK, this could work:
 
-test_bayesian_rowwise <- test_bayesian_data %>%
+test_bayesian_rowwise <- test_bayesian_data_hist %>%
   filter(vmax_sust >= 17.4) %>%
   group_by(gridid, storm_id) %>%
   nest() %>%
@@ -56,7 +71,7 @@ test_bayesian_rowwise %>%
 ## Huh, so then what *do* NA's mean here?
   # maybe something w/ filtering to min. windspeeds on the basis of exposures?
 
-test_bayesian_rowwise_summarized <- test_bayesian_data %>%
+test_bayesian_rowwise_summarized_hist <- test_bayesian_data_hist %>%
   filter(vmax_sust >= 17.4) %>%
   group_by(gridid, storm_id) %>%
   nest() %>%
@@ -64,6 +79,17 @@ test_bayesian_rowwise_summarized <- test_bayesian_data %>%
          impact_lower = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.025))),
          impact_median = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.5))),
          impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
+
+
+test_bayesian_rowwise_summarized <- test_bayesian_data_in %>%
+  filter(vmax_sust >= 17.4) %>%
+  group_by(gridid, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)),
+         impact_lower = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.025))),
+         impact_median = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.5))),
+         impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
+
 
 ############################################################3
 #  trying to work out why there are NAs
@@ -82,6 +108,29 @@ ggplot() +
   scale_color_viridis_c(option = 'plasma') +
   scale_fill_viridis_c(option = "mako") + 
   theme_void()
+
+# exploratory plot on why there are NA's in the Bayesian output:
+ggplot() +
+  geom_sf(aes(fill = vmax_sust,
+              alpha = vmax_sust >= 17.4,
+              geometry = geometry),
+          data = test_bayesian_data_in %>%
+            filter(storm_id == "0-0001-0") %>%
+            left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))) +
+  geom_sf(aes(  geometry = geometry, color = wind), 
+          data = (storm_10k_obs_na_proc %>% filter(storm_id == '0-0001-0') %>%
+                    mutate(longitude = longitude - 360) %>%
+                    st_as_sf(coords = c('longitude', 'latitude'),
+                             crs = "WGS84"))) +
+  scale_color_viridis_c(option = 'plasma', na.value = 'magenta') +
+  scale_fill_viridis_c(option = "mako") + 
+  theme_void()  +
+  geom_sf(aes(color = impact_median,
+              geometry = geometry), fill = NA,
+          data = test_bayesian_rowwise_summarized %>%
+            unnest(impact_median) %>% 
+            filter(storm_id == "0-0001-0") %>%
+            left_join(us_counties_wgs84, by = c("gridid" = "GEOID")))
 
   # not too enlightening; not sure why those ones are NA's vs ~0 like the other peripheral counties
 
