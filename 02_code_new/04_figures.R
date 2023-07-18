@@ -423,3 +423,114 @@ test_bayesian_rowwise_summarized_hist %>%
   # I mean, based on the simulated storm IDs, *looks* like there are years 0002-0999 represented
     # 1688 storms represented (presumably skipping sub-threshold ones?)
       # vs 106 historical ones -- still that ~15x multiplier
+
+
+
+####################3
+
+
+## OK, I'm liking this presentation: cumulative attributable mortality per year <-- probably manually adjsut at this point
+
+test_bayesian_rowwise_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  dplyr::select(-impact, - data) %>% 
+  group_by(gridid) %>% 
+  dplyr::summarise(., across(where(is.numeric), sum)) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = central / 1000) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void()
+
+# OK, so even w/ filtering, there are still 1000 years represented here
+
+test_bayesian_rowwise_hist_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  dplyr::select(-impact, - data) %>% 
+  group_by(gridid) %>% 
+  dplyr::summarise(., across(where(is.numeric), sum)) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = central / 30) + # 2018 - 1988 -- ideally find one starting in 1980 
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void()
+
+# trying a difference plot
+
+
+test_bayesian_rowwise_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central_sim", "upper_sim", "lower_sim") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  dplyr::select(-impact, - data) %>% 
+  group_by(gridid) %>% 
+  dplyr::summarise(., across(where(is.numeric), ~sum(.x)/1000)) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  full_join(
+    test_bayesian_rowwise_hist_95_cis %>% 
+      unnest(impact_summary) %>% 
+      unnest(impact_summary) %>%
+      mutate(intervals = rep(c("central_hist", "upper_hist", "lower_hist") )) %>%
+      pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+      dplyr::select(-impact, - data) %>% 
+      group_by(gridid) %>% 
+      dplyr::summarise(., across(where(is.numeric), ~sum(.x)/30)) %>% 
+      left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))
+    
+  ) %>% mutate(central_diff = central_sim - central_hist) %>% ggplot() + 
+  aes(geometry = geometry, fill = central_diff) +
+  geom_sf() + 
+  scale_fill_viridis_c(option = "cividis") + 
+  theme_void()
+    # wow, a lot higher; I guess make sure I'm filtering these by the same criteria
+
+# example of looking for specific storms by impact, etc.:
+test_bayesian_rowwise_hist_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central_hist", "upper_hist", "lower_hist") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  unnest(data) %>%
+  arrange(desc(central_hist))
+
+  # can also use `str_detect` for specific storms:
+
+test_bayesian_rowwise_hist_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central_hist", "upper_hist", "lower_hist") )) %>%  pivot_wider(values_from = impact_summary, names_from = intervals) %>% unnest(data) %>% filter(str_detect(storm_id, "Katrina")) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))  %>% ggplot() + 
+  aes(geometry = geometry, fill = central_hist) +
+  geom_sf() + 
+  scale_fill_viridis_c(option = "cividis") + 
+  theme_void()
+
+# OK, so even w/ filtering, there are still 1000 years represented here
+
+test_bayesian_rowwise_hist_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  dplyr::select(-impact, - data) %>% 
+  group_by(gridid) %>% 
+  dplyr::summarise(., across(where(is.numeric), sum)) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = central / 30) + # 2018 - 1988 -- ideally find one starting in 1980 
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void()
+
+
+
+# ideally track down IBTrACS or something similar 

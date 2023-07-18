@@ -21,8 +21,9 @@ Sys.time()
 
 ##########
 
-## replacing w/ some of the locally-processed STORM data:
-test_bayesian_data_in <- storm_10k_obs_na_all_proc_ggw %>%
+# replacing w/ some of the locally-processed STORM data:
+  # huh for some reason appears to have retained the  
+test_bayesian_data_in <- storm_10k_obs_na_proc_hurricane_ggw %>%
   rownames_to_column("storm_id") %>%
   mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
   filter(!is.na(date_time_max_wind))  %>%
@@ -51,7 +52,15 @@ test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data[13,]))
 
 # OK, this could work:
 
-test_bayesian_rowwise <- test_bayesian_data_hist %>%
+
+
+test_bayesian_rowwise <- test_bayesian_data_in %>%
+  filter(vmax_sust >= 17.4) %>%
+  group_by(gridid, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
+
+test_bayesian_rowwise_hist <- test_bayesian_data_hist %>%
   filter(vmax_sust >= 17.4) %>%
   group_by(gridid, storm_id) %>%
   nest() %>%
@@ -89,6 +98,68 @@ test_bayesian_rowwise_summarized <- test_bayesian_data_in %>%
          impact_lower = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.025))),
          impact_median = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.5))),
          impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
+
+
+#######################################################3
+
+############# Setting up versions with only >30ms *winds* (not just storms)
+#########################################3
+
+  # Oh, this is could be a good illustration of the 'rare but hihg-impact' subset
+    # historical record is pretty spotty, while sim. is much more of coast
+
+test_bayesian_data_in_cat_1_p <- storm_10k_obs_na_proc_hurricane_ggw %>%
+  filter(vmax_sust >= 32.9) %>% # maybe should filter in the next function upstream?
+  rownames_to_column("storm_id") %>%
+  mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
+  filter(!is.na(date_time_max_wind))  %>%
+  left_join(county_acs_vars_bayesian, 
+            by = c("gridid" = "GEOID")) %>%
+  mutate(exposure = replace_na(exposure, 1)) %>%
+  filter(!is.na(median_house_value))
+  # only 7178 rows; 608 storms; is that low?
+
+test_bayesian_data_hist_cat_1_p <- (hurricaneexposuredata::storm_winds %>%  
+                                      filter(vmax_sust >= 32.9) %>%
+                              left_join(county_acs_vars_bayesian, 
+                                        by = c("fips" = "GEOID"))) %>%
+  rename(gridid = fips) %>%
+  filter(!is.na(median_age))
+
+
+
+
+test_bayesian_rowwise_c1_p <- test_bayesian_data_in_cat_1_p %>%
+  filter(vmax_sust >= 17.4) %>%
+  group_by(gridid, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
+
+test_bayesian_rowwise_hist_c1_p <- test_bayesian_data_hist_cat_1_p %>%
+  filter(vmax_sust >= 17.4) %>%
+  group_by(gridid, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
+
+# 
+
+
+test_bayesian_rowwise_c1_p_95_cis <- test_bayesian_rowwise_c1_p %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
+
+
+
+test_bayesian_rowwise_hist_c1_p_95_cis <- test_bayesian_rowwise_hist_c1_p %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
+
+
+
+# yeah, still 'spotty' geo. coverage even w/ pre filtering; not sure what I'd be expecting 
+
+
+############################
 
 
 ############################################################3
@@ -178,10 +249,47 @@ test_bayesian_rowwise %>%
   
 mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(data_in = unlist(.x))))
 
+## plots
 
+
+test_bayesian_rowwise_c1_p_95_cis %>% 
+  mutate(deaths_base = purrr::map(.x = data,
+                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
+                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  unnest(deaths_attr) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_upper", "deaths_lower"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
+  group_by(gridid) %>%
+  dplyr::summarize(across(where(is.numeric), sum)) %>%
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = deaths_central / 1000) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  labs(title = "Estimated annual TC-atributable deaths (1000 synthetic years); Category 1 and Higher")
 
 # Weird; just grabbing means only takes a few seconds, but something like `summary()` runs indefinitely
   
+## Esitamtes are seeming suspiciously low for historical storms;
+  # could see Katrina being an outlier (post-storm management compounded), but seems low in general
+
+# Michael (2018): ~59 US deaths (per Wikipedia) vs ~6.7 (>= 32.9m/s) or -14 (full dataset)
+ # etc.
+
+
+test_bayesian_rowwise_hist_c1_p_95_cis %>% 
+  mutate(deaths_base = purrr::map(.x = data,
+                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
+                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  unnest(deaths_attr) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_upper", "deaths_lower"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>% unnest(data) %>% filter(str_detect(storm_id, "Michael")) %>%
+  group_by(gridid) %>%
+  dplyr::summarize(across(where(is.numeric), sum)) %>% dplyr::select(deaths_central) %>% sum()
+
 # Trying to get 95% CI assuming a normal distirubiton
 
 get_95_ci <- function(data_in){
@@ -197,11 +305,143 @@ get_95_ci <- function(data_in){
   return(sd_obj)
 }
 
-test_bayesian_rowwise %>%
-  unnest(data)
+test_bayesian_rowwise_95_cis <- test_bayesian_rowwise %>%
+  #unnest(data)
   mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
   
- 
+test_bayesian_rowwise_hist_95_cis <- test_bayesian_rowwise_hist %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
+
+## Getting in a more useful format
+test_bayesian_rowwise_hist_95_cis %>% unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals)
+
+test_bayesian_rowwise_95_cis %>% unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals)
+
+# estimating attributable deaths (fixed populations/rates)
+
+test_bayesian_rowwise_95_cis %>% 
+  mutate(deaths_base = purrr::map(.x = data,
+                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
+                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  unnest(deaths_attr) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deahts_upper", "deaths_lower"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) 
+
+# plot
+
+test_bayesian_rowwise_95_cis %>% 
+  mutate(deaths_base = purrr::map(.x = data,
+                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
+                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  unnest(deaths_attr) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_upper", "deaths_lower"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
+  group_by(gridid) %>%
+  dplyr::summarize(across(where(is.numeric), sum)) %>%
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = deaths_central / 1000) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  labs(title = "estimated annual TC-atributable deaths (1000 synthetic years)")
+
+
+test_bayesian_rowwise_95_cis %>% 
+  mutate(deaths_base = purrr::map(.x = data,
+                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
+                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  unnest(deaths_attr) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central",
+                                   "deaths_upper",
+                                   "deaths_lower"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
+  group_by(gridid) %>%
+  dplyr::summarize(across(where(is.numeric), sum)) %>%
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = deaths_central / 1000) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  labs(title = "estimated annual TC-atributable deaths (1000 synthetic years)")
+
+
+test_bayesian_rowwise_hist_95_cis %>% 
+  mutate(deaths_base = purrr::map(.x = data,
+                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
+                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  unnest(deaths_attr) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central",
+                                   "deaths_upper",
+                                   "deaths_lower"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
+  group_by(gridid) %>%
+  dplyr::summarize(across(where(is.numeric), sum)) %>%
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = deaths_central / 30) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  labs(title = "estimated annual TC-atributable deaths (1988-2018)")
+
+  #3 trying a plot:
+
+test_bayesian_rowwise_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  dplyr::select(-impact, - data) %>% 
+  group_by(gridid) %>% 
+  dplyr::summarise(., across(where(is.numeric), median)) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = central) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void()
+
+test_bayesian_rowwise_hist_95_cis %>% 
+  unnest(impact_summary) %>% 
+  unnest(impact_summary) %>%
+  mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+  pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+  dplyr::select(-impact, - data) %>% 
+  group_by(gridid) %>% 
+  dplyr::summarise(., across(where(is.numeric), median)) %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = central) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void()
+
+test_bayesian_rowwise_95_cis %>% 
+  unnest(data) %>% 
+  group_by(gridid) %>% dplyr::select(poverty_prop:population_density) %>% unique()  %>%
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = age_65_plus) +
+  geom_sf() + 
+  scale_fill_viridis_c(trans = 'log') + 
+  theme_void()
+
+# huh--still seeing more negatives than not; I guess double check inclusion criteria?
+  # oh, I'm filtering per-storm instead of per-timestep, so it's storms that reach at least that 32.9 m/s
+    # feels like that makes sense, though; otherwise would only be including snippets
 
 # Trying to write a 95% CI script
 # https://www.cyclismo.org/tutorial/R/confidence.html#:~:text=We%20use%20a%2095%25%20confidence%20level%20and%20wish,%2B%20error%20%3E%20left%204.063971%20%3E%20right%205.936029 from 
@@ -220,6 +460,37 @@ a <- 5
 #[1] 5.876523
 
 ####
+ 
+ # comparing populations:
+ 
+ test_bayesian_rowwise_95_cis %>% 
+   unnest(impact_summary) %>% 
+   unnest(impact_summary) %>%
+   mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+   pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+   dplyr::select(-impact,) %>%
+   group_by(gridid) %>% 
+   unnest(data) %>%
+   dplyr::summarise(., across(where(is.numeric), median)) %>% 
+   dplyr::select(age_65_plus, population) %>%
+   summary()
+ 
+ 
+ test_bayesian_rowwise_95_cis %>% 
+   unnest(impact_summary) %>% 
+   unnest(impact_summary) %>%
+   mutate(intervals = rep(c("central", "upper", "lower") )) %>%
+   pivot_wider(values_from = impact_summary, names_from = intervals) %>% 
+   dplyr::select(-impact,) %>%
+   group_by(gridid) %>% 
+   unnest(data) %>%
+   dplyr::summarise(., across(where(is.numeric), median)) %>% 
+   mutate(mort_rate = deaths / population,
+          deaths = mort_rate * age_65_plus,
+          deaths_attr = (deaths / 100000) * central) # any more efficient way to get  all 3 estimates? <- maybe unnest before pivot_wider?
+ 
+ 
+ 
 
 ############################################################################################################
   # OK, think everything below this can be skipped, but holding off on deleting for now...
@@ -361,3 +632,6 @@ county_mortality_pred_bayesian(pred_model = predict.tcExcessMort)
 predict.tcExcessMort(newdata = (hurricaneexposuredata::storm_winds %>% 
                                   left_join(county_acs_vars_bayesian, 
                                             by = c("fips" = "GEOID"))))
+
+
+)

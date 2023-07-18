@@ -27,7 +27,15 @@ library(hurricaneexposuredata)
 
 # Counties -- moving up so I can filter by geometry
 
-us_counties <- tidycensus::county_laea # need to add the `area` column, but otherwise OK
+us_counties <- tidycensus::county_laea %>%
+  filter(!str_detect(GEOID, "02\\d{3}|15\\d{3}")) # removing AK, HI 
+
+# maybe crude, but one way to get a bit more filtering w/o explicit geometry:
+
+us_counties_fl_me <- us_counties %>%
+  filter(str_detect(GEOID, "12\\d{3}|23\\d{3}"))
+
+# need to add the `area` column, but otherwise OK
 # check default unit there; I think it's still m^2
 # preloaded county geometry; hopefully doesn't cause any issues
 
@@ -37,7 +45,7 @@ us_counties <- tidycensus::county_laea # need to add the `area` column, but othe
 us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
 us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
-sf_use_s2(FALSE) # turns off spherical geometry; apparently causing issues /w buffer?
+#sf_use_s2(FALSE) # turns off spherical geometry; apparently causing issues /w buffer?
 
 us_counties_wgs84_merged_buffer <- us_counties_wgs84 %>%
   st_union() %>%
@@ -450,6 +458,8 @@ exposure_draft1 <- hurricaneexposuredata::storm_winds %>%
 
 ###
   # adding an extra variable for actual population age 65+; don't think that should cause any issues
+    # didn't seem to; another for mortality rates
+    # also has full county names--I guess more convenient
 county_acs_vars_bayesian <- county_acs_vars %>%
   filter(!is.na(estimate)) %>%
   select(-moe) %>%
@@ -487,7 +497,8 @@ county_acs_vars_bayesian <- county_acs_vars %>%
   ) %>%
   left_join(exposure_draft1, by = c("GEOID" = "fips")) %>%
   select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value) %>%
-  mutate(exposure = replace_na(exposure, 1))
+  mutate(exposure = replace_na(exposure, 0)) %>% # 1 or 0? (0 seems to be 'out of scope')
+  left_join(counties_mort_65, by = c("GEOID" = "county_code"))
 
 # Huh--somehow gives a few "infinite" population densities; maybe 0 people??
   # *Still 5 NA's for median house vale, 78 for no_grad_pop, etc.
