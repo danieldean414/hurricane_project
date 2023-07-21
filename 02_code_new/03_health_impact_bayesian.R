@@ -1,28 +1,59 @@
 
 # trying to work out which of these are ~functional/final steps
+
+# Trying to get 95% CI assuming a normal distirubiton
+
+get_95_ci <- function(data_in){
+  s_d = sd(data_in, na.rm = TRUE)
+  error = qnorm(0.975)*s_d/sqrt(length(data_in))
+  mean = mean(data_in)
+  
+  sd_obj = list(
+    mean = mean,
+    lower = mean - error,
+    upper = mean + error
+  )
+  return(sd_obj)
+}
+
+
 #################################################################33
+  # !: Want to make sure it follows same filtering criteria
 
 # Using historical data
-test_bayesian_data_hist <- (hurricaneexposuredata::storm_winds %>%  
-                         left_join(county_acs_vars_bayesian, 
-                                   by = c("fips" = "GEOID"))) %>%
-  rename(gridid = fips) %>%
-  filter(!is.na(median_age))
+
+load(file = "01_data/storm_hist_proc_hurricane_ggw.rda")
+  # remember, this is the one filtered to storms reaching at least Cat 1
+
+# trying to track down some NA's
+    # OK, already there are 13918 NA's for date/time/etc. at this point
+    # Are there in the raw historical data?
+test_bayesian_data_hist <- (storm_hist_proc_hurricane_ggw %>%  
+                         rownames_to_column("storm_id") %>%
+                          mutate(storm_id = str_remove_all(storm_id, pattern = "\\.\\d*")) %>%
+                           filter(!is.na(date_time_max_wind))  %>%
+                           left_join(county_acs_vars_bayesian, 
+                                     by = c("gridid" = "GEOID")) %>%
+                           mutate(exposure = replace_na(exposure, 1)) %>%
+                           filter(!is.na(median_house_value)))
 
 # why are there NAs in the historic data??
   # I guess from the county data? <- OK, same 3 as before Kenedy, Loving, and that "retired" VA one
     # don't remember them before, though
 
-Sys.time()
-test_bayesian_hist <- predict(modobj, newdata = (test_bayesian_data_hist) )
+#Sys.time()
+#test_bayesian_hist <- predict(modobj, newdata = (test_bayesian_data_hist) )
 # OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
 # ohh, still NAs for things like median income, etc.; I remember this is a concern
-Sys.time()
+#Sys.time()
 
 ##########
 
 # replacing w/ some of the locally-processed STORM data:
   # huh for some reason appears to have retained the  
+
+load(file = "storm_10k_obs_na_proc_hurricane_ggw.rda")
+
 test_bayesian_data_in <- storm_10k_obs_na_proc_hurricane_ggw %>%
   rownames_to_column("storm_id") %>%
   mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
@@ -36,11 +67,11 @@ test_bayesian_data_in <- storm_10k_obs_na_proc_hurricane_ggw %>%
         # plus Bedford City County, VA, which was folded into a larger county in 2015
 
 
-Sys.time()
-test_bayesian <- predict(modobj, newdata = (test_bayesian_data_in) )
+#Sys.time()
+#test_bayesian <- predict(modobj, newdata = (test_bayesian_data_in) )
 # OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
 # ohh, still NAs for things like median income, etc.; I remember this is a concern
-Sys.time()
+#Sys.time()
 
 # Well, on the bright side, runs pretty much instantaneously with 100 rows;
   # output is 47000 numbers; I guess 470 per row? seems like an odd 'default' number
@@ -100,6 +131,41 @@ test_bayesian_rowwise_summarized <- test_bayesian_data_in %>%
          impact_upper = purrr::map(.x = impact, .f = ~quantile(.x, probs = c(0.975))))
 
 
+test_bayesian_rowwise_95_cis <- test_bayesian_rowwise %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~as.data.frame(get_95_ci((.x)))))
+
+
+
+test_bayesian_rowwise_hist95_cis <- test_bayesian_rowwise_hist %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~as.data.frame(get_95_ci((.x)))))
+
+
+####### Quick plot
+
+
+test_bayesian_rowwise_95_cis %>% 
+  #mutate(deaths_base = purrr::map(.x = data,
+  #                                .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  #mutate(deaths_attr = purrr::map2(.x = deaths, .y = impact_summary,
+  #                                 .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  mutate(deaths_attr = purrr::map2(.x = data, .y = impact_summary,
+                                   .f = ~(((.x$age_65_plus)/100000) * (.y)))) %>% 
+  unnest(deaths_attr) %>%
+  #mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_lower", "deaths_upper"))) %>%
+  #pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
+  group_by(gridid) %>%
+  dplyr::summarize(across(where(is.numeric), sum)) %>%
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = mean / 1000) + # for the 1000 years in this set
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  labs(title = "Estimated annual TC-atributable deaths (1000 synthetic years)")
+
+
 #######################################################3
 
 ############# Setting up versions with only >30ms *winds* (not just storms)
@@ -119,12 +185,15 @@ test_bayesian_data_in_cat_1_p <- storm_10k_obs_na_proc_hurricane_ggw %>%
   filter(!is.na(median_house_value))
   # only 7178 rows; 608 storms; is that low?
 
-test_bayesian_data_hist_cat_1_p <- (hurricaneexposuredata::storm_winds %>%  
-                                      filter(vmax_sust >= 32.9) %>%
-                              left_join(county_acs_vars_bayesian, 
-                                        by = c("fips" = "GEOID"))) %>%
-  rename(gridid = fips) %>%
-  filter(!is.na(median_age))
+test_bayesian_data_hist_cat_1_p <- (storm_hist_proc_hurricane_ggw %>%  
+                                      filter(vmax_sust >= 32.9) %>% # maybe should filter in the next function upstream?
+                                      rownames_to_column("storm_id") %>%
+                                      mutate(storm_id = str_remove_all(storm_id, pattern = "\\.\\d*")) %>%
+                                      filter(!is.na(date_time_max_wind))  %>%
+                                      left_join(county_acs_vars_bayesian, 
+                                                by = c("gridid" = "GEOID")) %>%
+                                      mutate(exposure = replace_na(exposure, 1)) %>%
+                                      filter(!is.na(median_house_value)))
 
 
 
@@ -146,13 +215,14 @@ test_bayesian_rowwise_hist_c1_p <- test_bayesian_data_hist_cat_1_p %>%
 
 test_bayesian_rowwise_c1_p_95_cis <- test_bayesian_rowwise_c1_p %>%
   #unnest(data)
-  mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~as.data.frame(get_95_ci((.x)))))
 
 
 
 test_bayesian_rowwise_hist_c1_p_95_cis <- test_bayesian_rowwise_hist_c1_p %>%
   #unnest(data)
-  mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(unlist(.x))))
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~as.data.frame(get_95_ci((.x)))))
+
 
 
 
@@ -250,21 +320,23 @@ test_bayesian_rowwise %>%
 mutate(impact_summary = purrr::map(.x = impact, .f = ~get_95_ci(data_in = unlist(.x))))
 
 ## plots
-
+  # OK, revisiting it, I *think* excess events is per population, not per deaths
 
 test_bayesian_rowwise_c1_p_95_cis %>% 
-  mutate(deaths_base = purrr::map(.x = data,
-                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
-  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
-                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  #mutate(deaths_base = purrr::map(.x = data,
+  #                                .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  #mutate(deaths_attr = purrr::map2(.x = deaths, .y = impact_summary,
+  #                                 .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+  mutate(deaths_attr = purrr::map2(.x = data, .y = impact_summary,
+                                   .f = ~(((.x$age_65_plus)/100000) * (.y)))) %>% 
   unnest(deaths_attr) %>%
-  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_upper", "deaths_lower"))) %>%
-  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
+  #mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_lower", "deaths_upper"))) %>%
+  #pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>%
   group_by(gridid) %>%
   dplyr::summarize(across(where(is.numeric), sum)) %>%
   left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
   ggplot() + 
-  aes(geometry = geometry, fill = deaths_central / 1000) +
+  aes(geometry = geometry, fill = mean / 1000) + # for the 1000 years in this set
   geom_sf() + 
   scale_fill_viridis_c() + 
   theme_void() +
@@ -279,31 +351,25 @@ test_bayesian_rowwise_c1_p_95_cis %>%
  # etc.
 
 
+# Yeah, at least trying to replicate methods papers' figures,
+  # looking a lot more like it's excess events per 100k *residents*, not deaths
+  # Katrina estimate of ~470, vs ~16 by deaths; figure has center somewhere around 500
+
+
 test_bayesian_rowwise_hist_c1_p_95_cis %>% 
-  mutate(deaths_base = purrr::map(.x = data,
-                                  .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
-  mutate(deaths_attr = purrr::map2(.x = deaths_base, .y = impact_summary,
-                                   .f = ~((as.numeric(.x)/100000) * as.numeric(.y)))) %>% 
+ # mutate(deaths_base = purrr::map(.x = data,
+  #                                .f = ~(((.x$deaths / .x$population) * .x$age_65_plus))) ) %>%
+  mutate(deaths_attr = purrr::map2(.x = data, .y = impact_summary,
+                                   .f = ~((as.numeric(.x$age_65_plus)/100000) * as.numeric(.y)))) %>% 
   unnest(deaths_attr) %>%
-  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_upper", "deaths_lower"))) %>%
-  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>% unnest(data) %>% filter(str_detect(storm_id, "Michael")) %>%
+  mutate(deaths_attr_95_ci = rep(c("deaths_central", "deaths_lower", "deaths_upper"))) %>%
+  pivot_wider(values_from = deaths_attr, names_from = deaths_attr_95_ci) %>% unnest(data) %>% 
+  filter(str_detect(storm_id, "Katrina")) %>%
   group_by(gridid) %>%
-  dplyr::summarize(across(where(is.numeric), sum)) %>% dplyr::select(deaths_central) %>% sum()
+  dplyr::summarize(across(where(is.numeric), sum)) %>% 
+  dplyr::select(deaths_central) %>% 
+  sum()
 
-# Trying to get 95% CI assuming a normal distirubiton
-
-get_95_ci <- function(data_in){
-  s_d = sd(data_in, na.rm = TRUE)
-  error = qnorm(0.975)*s_d/sqrt(length(data_in))
-  mean = mean(data_in)
-  
-  sd_obj = list(
-    mean = mean,
-    lower = mean - error,
-    upper = mean + error
-  )
-  return(sd_obj)
-}
 
 test_bayesian_rowwise_95_cis <- test_bayesian_rowwise %>%
   #unnest(data)

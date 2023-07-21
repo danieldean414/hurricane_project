@@ -27,13 +27,50 @@ library(hurricaneexposuredata)
 
 # Counties -- moving up so I can filter by geometry
 
-us_counties <- tidycensus::county_laea %>%
-  filter(!str_detect(GEOID, "02\\d{3}|15\\d{3}")) # removing AK, HI 
+us_counties <- get_acs(
+  geography = "county",
+  variables = "B06012_001",
+  year = 2020,
+  geometry = TRUE
+) 
+
+# includes Alaska, Hawai'i, etc. -- should I filter ahead of time?
+    # could use historical tracks, although I think that would be a bit reductive
+    # Oh, could use the coastal county lists
+      # BUT would have to think through how to avoid excluding inland storms
+        # could filter to 
+      # 
+  # Nice--already in a flat projection so *could* use explicit geo. operations
+
+# OK, all continental states are in the hurricane data
+
+#hurricaneexposuredata::county_centers %>% left_join(us_counties, by = c("fips" = "GEOID")) %>% ggplot() + aes(geometry = geometry) + geom_sf()
+
+
+######### NOT CURRENLTY USING; <-- now seems to be xausing a crash
+# OK, and counties w/ recorded exposures seems decently ~inclusive
+#us_counties_buffer <- hurricaneexposuredata::storm_winds %>% 
+#  dplyr::select(fips) %>%
+#  unique() %>%
+#  left_join(us_counties, by = c("fips" = "GEOID")) %>%
+#  st_as_sf() %>%
+#  st_union() %>%
+#  st_buffer(250000)   # I think the units are in meters, so 250 km should be 250000 m
+      # at least 'looks right' for what I'd expect 250 miles to look like
+
+
+coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE, startRow = 3) %>% clean_names()
+
+
+  
+
+#us_counties <- tidycensus::county_laea %>%
+#  filter(!str_detect(GEOID, "02\\d{3}|15\\d{3}")) # removing AK, HI 
 
 # maybe crude, but one way to get a bit more filtering w/o explicit geometry:
 
-us_counties_fl_me <- us_counties %>%
-  filter(str_detect(GEOID, "12\\d{3}|23\\d{3}"))
+#us_counties_fl_me <- us_counties %>%
+#  filter(str_detect(GEOID, "12\\d{3}|23\\d{3}"))
 
 # need to add the `area` column, but otherwise OK
 # check default unit there; I think it's still m^2
@@ -42,14 +79,14 @@ us_counties_fl_me <- us_counties %>%
 # trying to remember if we can just use data from `modobj` 
 
 
-us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
+#us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
 us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
 #sf_use_s2(FALSE) # turns off spherical geometry; apparently causing issues /w buffer?
 
-us_counties_wgs84_merged_buffer <- us_counties_wgs84 %>%
-  st_union() %>%
-  st_buffer(dist = (250 / 111.32)) # arc degree by default; these are 111.32 km
+#us_counties_wgs84_merged_buffer <- us_counties_wgs84 %>%
+#  st_union() %>%
+#  st_buffer(dist = (250 / 111.32)) # arc degree by default; these are 111.32 km
 
 ############## Netcdf4 data (hurricane simulation output)
 
@@ -129,6 +166,9 @@ storm_10k_obs_list <- storm_10k_obs_list[9]
     # any way I can reduce RAM load (e.g. pre-aggregating)?
     # or else run on server
 
+# OK, I guess need to convert to geometry objects and then back if I'm using an
+  # explicit 250km buffer
+
 storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
   # trying to think through an efficient way to add some index for set of years
   # seem to have hit memory limit (~3 GB); doesn't seem to let me read them in again
@@ -157,10 +197,12 @@ storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
   filter(max_max_wind_speed >= 32.9) %>% 
   mutate(longitude = longitude - 360) %>%
   #st_as_sf(coords = c('longitude', 'latitude'),
-  #         crs = "WGS84") %>%
+  #         crs = st_crs(us_counties)) %>%
   #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
   mutate(us_contact = (longitude < st_bbox(us_counties_wgs84)$xmax + (250 / 111.32) &
                          latitude > st_bbox(us_counties_wgs84)$ymin - (250 / 111.32))) %>%
+  #mutate(us_contact = st_is_within_distance(., st_union(us_counties), dist = 250000 )) %>%
+  #mutate(us_contact = st_intersects(geometry, us_counties_buffer)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%
   group_by(year, tc_number, year_set) %>%
   dplyr::filter(sum(landfall) > 1) %>%
@@ -203,6 +245,160 @@ storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
   select(storm_id, date, wind, latitude, longitude) # not sure if this will cause problems
 
 #st_intersection(storm_10k_obs_na_proc_hurricane, st_buffer(us_counties_wgs84, ))
+
+## historical version
+
+storm_hist_proc_hurricane <- hurricaneexposuredata::hurr_tracks  %>%
+  #mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  #mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  #mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  #dplyr::select(-change) %>%
+  #group_by(year, tc_number, year_set) %>%
+  mutate(max_max_wind_speed = max(wind)) %>%
+  filter(max_max_wind_speed >= 64) %>%  # equivalent to 32.9 m/s, I think
+  mutate(longitude = longitude - 360) %>%
+  #st_as_sf(coords = c('longitude', 'latitude'),
+  #         crs = st_crs(us_counties)) %>%
+  #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
+  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84)$xmax + (250 / 111.32) &
+                         latitude > st_bbox(us_counties_wgs84)$ymin - (250 / 111.32))) %>%
+  #mutate(us_contact = st_is_within_distance(., st_union(us_counties), dist = 250000 )) %>%
+  #mutate(us_contact = st_intersects(geometry, us_counties_buffer)) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  #group_by(year, tc_number, year_set) %>%
+  group_by(storm_id) %>%
+  #dplyr::filter(sum(landfall) > 1) %>% # no landfall ID, but assuming this is equivalent?
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
+  add_tally() %>%
+  filter(n > 2) %>%
+  filter(sum(us_contact) > 1) %>% # & sum(landfall) > 1) %>%
+  ungroup() 
+
+
+###################################################3
+    # Trying full 10k years
+###################################################
+
+  # have to reset b/c I'm overwriting /w subset
+storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
+                                 full.names = TRUE, pattern = ".*NA.*") 
+
+# trying one of the climate change models
+storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
+                                 full.names = TRUE, pattern = ".*NA.*") 
+
+
+storm_10k_obs_list <- storm_10k_obs_list
+# trying next 1000 to see how similar the subsets are
+
+#############################################################################
+
+# Wow, was forgetting to pre-filter to North Atlantic!
+# still too big to read in with a direct call, but loop might work now...
+
+# hopefully not too much memory here...
+# storm_10k_obs_all <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
+#hmm; 'resource temporarily unavailable'-- assuming it's memory-based?
+# any way I can reduce RAM load (e.g. pre-aggregating)?
+# or else run on server
+
+# OK, I guess need to convert to geometry objects and then back if I'm using an
+# explicit 250km buffer
+
+storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
+# trying to think through an efficient way to add some index for set of years
+# seem to have hit memory limit (~3 GB); doesn't seem to let me read them in again
+
+# try:
+#storm_10k_obs_na <- dplyr::bind_rows(read_csv(storm_10k_obs_list, col_names = FALSE), .id = 'year_set')
+# oh, turns out `rbind` is superfluous, so already just one dataframe
+
+## Setting up a new version:
+#-prefiltering to 64 knots and/or 32.9 m/s (reach at least this speed)
+# Hoenstly just that might drop it to a manageable amount
+# and then either use st_as_sf() + buffer, or some kind of bounding box 
+# any way to get diagnonals, etc., w/o geometry?
+
+names(storm_10k_obs_na) <- storm_names
+
+# OK, even w/ a lot of extra storms off to SE, hurricanes + <=250km cuts it down to ~10% of orig. 
+storm_10k_all_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  dplyr::select(-change) %>%
+  group_by(year, tc_number, year_set) %>%
+  mutate(max_max_wind_speed = max(max_wind_speed)) %>%
+  filter(max_max_wind_speed >= 32.9) %>% 
+  mutate(longitude = longitude - 360) %>%
+  #st_as_sf(coords = c('longitude', 'latitude'),
+  #         crs = st_crs(us_counties)) %>%
+  #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
+  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84)$xmax + (250 / 111.32) &
+                         latitude > st_bbox(us_counties_wgs84)$ymin - (250 / 111.32))) %>%
+  #mutate(us_contact = st_is_within_distance(., st_union(us_counties), dist = 250000 )) %>%
+  #mutate(us_contact = st_intersects(geometry, us_counties_buffer)) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(year, tc_number, year_set) %>%
+  dplyr::filter(sum(landfall) > 1) %>%
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
+  add_tally() %>%
+  filter(n > 2) %>%
+  filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  ungroup() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          year_set,
+                          sep = "-"),
+         #wind = max_wind_speed / 1.852 # converting km/h to knots
+         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           )) %>% #,
+  #longitude = longitude -360) %>%# also seems to work as-is?
+  #select(storm_id, date, latitude, longitude, wind)
+  select(storm_id, date, wind, latitude, longitude) # not sure if this will cause problems
+
+
+save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_proc_hurricane.rda")
+#st_intersection(storm_10k_obs_na_proc_hurricane, st_buffer(us_counties_wgs84, ))
+
+
+####################################################
+
+####################################################
+
+
+
 
 #########################3
 names(storm_10k_obs_na) <- storm_names
@@ -394,7 +590,6 @@ county_acs_vars <- tidycensus::get_acs(geography = 'county',
 
 save(county_acs_vars, file = "01_data/county_acs_vars.rda") # just in case I need to reload offline
 
-coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE, startRow = 3) %>% clean_names()
 
 
 #####################################################################################################

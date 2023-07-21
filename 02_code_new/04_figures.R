@@ -1,5 +1,28 @@
 # Have various exploratory plots up, but aiming to set up formal 'figures'
 
+# ~supplementary plot showing explict geographic buffer (vs 'bounding box' approach
+
+ggplot() +
+  geom_sf(
+    aes(geometry = geometry),
+    data = (hurricaneexposuredata::storm_winds %>% 
+              dplyr::select(fips) %>%
+              unique() %>%
+              left_join(us_counties, by = c("fips" = "GEOID")) %>%
+              st_as_sf() %>%
+              st_union() %>% st_buffer(250000))) +
+  geom_sf(
+    aes(geometry = geometry),
+    data = (hurricaneexposuredata::storm_winds %>% 
+              dplyr::select(fips) %>%
+              unique() %>%
+              left_join(us_counties, by = c("fips" = "GEOID")) %>%
+              st_as_sf() %>%
+              st_union()))
+  
+
+
+
 # Figure 1: Plot of study populations, maybe other relevant traits
 
 ##########################################################################################

@@ -18,12 +18,66 @@
   # either of ~primary interest, or as more of a ~supplemental thing
 
 
+load("01_data/storm_hist_proc_hurricane_64_knots_plus.rda")
+# filtered w/ same conditions (minus landfall) as simualted data
+# called "storm_hist_proc_hurricane"
+
+
+storm_hist_proc_hurricane_split <- split(storm_hist_proc_hurricane,
+                                               f = storm_hist_proc_hurricane$storm_id)
+
+start <- Sys.time()#proc.time()
+cl <- makeCluster(7) # 8 for ~full utilization
+storm_hist_proc_hurricane_split_ggw <- parLapply(cl,
+                                                       (storm_hist_proc_hurricane_split),
+                                                       get_grid_winds)
+stopCluster(cl)
+end <- Sys.time() #proc.time()
+print(end - start) 
+
+time_na <- end-start
+
+Sys.time()
+storm_hist_proc_hurricane_ggw <- do.call("rbind", storm_hist_proc_hurricane_split_ggw)
+Sys.time()
+
+save(storm_hist_proc_hurricane_ggw, file = "01_data/storm_hist_proc_hurricane_ggw.rda")
+
+
+
 
 # trying the filtered NA/US within 1 degree; thinking I could compare specific storms to get a sense of accuracy
 # full dataset seems to crash in ~3.5 hours (issue with `seq()` encoutering a non-finite value?)
 
 
+
+
 #########3
+
+##################################################
+
+# Trying full 10k years (should rename current 1k test)
+
+
+storm_10k_all_obs_na_proc_hurricane_split <- split(storm_10k_all_obs_na_proc_hurricane,
+                                               f = storm_10k_all_obs_na_proc_hurricane$storm_id)
+
+start <- Sys.time()#proc.time()
+cl <- makeCluster(7) # 8 for ~full utilization
+storm_10k_all_obs_na_proc_hurricane_split_ggw <- parLapply(cl,
+                                                       (storm_10k_all_obs_na_proc_hurricane_split),
+                                                       get_grid_winds)
+stopCluster(cl)
+end <- Sys.time() #proc.time()
+print(end - start) 
+
+time_na <- end-start
+
+Sys.time()
+storm_10k_all_obs_na_proc_hurricane_ggw <- do.call("rbind", storm_10k_all_obs_na_proc_hurricane_split_ggw)
+Sys.time()
+
+save(storm_10k_all_obs_na_proc_hurricane_ggw, file = "01_data/storm_10k_all_obs_na_proc_hurricane_ggw.rda")
 
 # trying the filtered NA/US within 1 degree; thinking I could compare specific storms to get a sense of accuracy
   # full dataset seems to crash in ~3.5 hours (issue with `seq()` encoutering a non-finite value?)
@@ -45,6 +99,11 @@ time_na <- end-start
 Sys.time()
 storm_10k_obs_na_proc_hurricane_ggw <- do.call("rbind", storm_10k_obs_na_proc_hurricane_split_ggw)
 Sys.time()
+
+###############################
+
+
+
   # ran for ~2 hours before crashing (cannot allocate vector of size 19 Kb)
     # maybe missed it, but session was only at ~2.8 Gb
 
