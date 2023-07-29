@@ -82,6 +82,13 @@ coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE,
 #us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
 us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
+# OK, this includes islands; filtering down to just Atlantic, GoM, coastsL
+
+us_counties_wgs84_atlantic <- (us_counties_wgs84 %>% 
+    filter(GEOID %in% (coastlines %>%
+                         filter(coastline_region %in% 
+                                  c("Atlantic", "Gulf of Mexico")))$state_county_fips))
+
 #sf_use_s2(FALSE) # turns off spherical geometry; apparently causing issues /w buffer?
 
 #us_counties_wgs84_merged_buffer <- us_counties_wgs84 %>%
@@ -181,7 +188,7 @@ storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
   #-prefiltering to 64 knots and/or 32.9 m/s (reach at least this speed)
   # Hoenstly just that might drop it to a manageable amount
   # and then either use st_as_sf() + buffer, or some kind of bounding box 
-    # any way to get diagnonals, etc., w/o geometry?
+    # any way to get diagnoals, etc., w/o geometry?
 
 names(storm_10k_obs_na) <- storm_names
 
@@ -199,8 +206,8 @@ storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
   #st_as_sf(coords = c('longitude', 'latitude'),
   #         crs = st_crs(us_counties)) %>%
   #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
-  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84)$xmax + (250 / 111.32) &
-                         latitude > st_bbox(us_counties_wgs84)$ymin - (250 / 111.32))) %>%
+  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84_atlantic)$xmax + (250 / 111.32) &
+                         latitude > st_bbox(us_counties_wgs84_atlantic)$ymin - (250 / 111.32))) %>%
   #mutate(us_contact = st_is_within_distance(., st_union(us_counties), dist = 250000 )) %>%
   #mutate(us_contact = st_intersects(geometry, us_counties_buffer)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%
@@ -214,32 +221,27 @@ storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
              cross_sum == 0) &
            !(us_contact == FALSE &
                cross_sum == max_cross_sum)) %>%
-  add_tally() %>%
-  filter(n > 2) %>%
+  #add_tally() %>%
+  #filter(n > 2) %>%
   filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
   ungroup() %>%
+  mutate(wind = max_wind_speed * 1.9438444924) %>% # converting m/s to knots
   mutate(year = year + 1,
-         #hours_base = timestep_3_hourly * 3,
-         hours_base = time_step * 3,
-         hour = hours_base %% 24,
-         day = ((hours_base - hour) / 24) + 1,
          storm_id = paste(tc_number,
                           str_pad(year, width = 4,
                                   side = "left",
-                                  pad = 0),
+                                  pad = 0), 
+                          month,
                           year_set,
-                          sep = "-"),
-         #wind = max_wind_speed / 1.852 # converting km/h to knots
-         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
-  ) %>% 
-  mutate(date = 
-           paste0(str_pad(year, width = 4, side = "left", pad = 0),
-                  str_pad(month, width = 2, side = "left", pad = 0),
-                  str_pad(day, width = 2, side = "left", pad = 0),
-                  str_pad(hour, width = 2, side = "left", pad = 0),
-                  "00"
-                  
-           )) %>% #,
+                          sep = "-")) %>%
+  mutate(start_ymd_hm = paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                               str_pad(month, width = 2, side = "left", pad = 0),
+                               "010000"),
+         date = lubridate::ymd_hm(start_ymd_hm) + time_step * 3 * 60 * 60, # 3-hour units
+         date = (as.character(date) %>%
+           str_remove_all("\\D") %>%
+           substr(1, nchar(.) -2))
+         ) %>% #,
   #longitude = longitude -360) %>%# also seems to work as-is?
   #select(storm_id, date, latitude, longitude, wind)
   select(storm_id, date, wind, latitude, longitude) # not sure if this will cause problems
@@ -261,8 +263,8 @@ storm_hist_proc_hurricane <- hurricaneexposuredata::hurr_tracks  %>%
   #st_as_sf(coords = c('longitude', 'latitude'),
   #         crs = st_crs(us_counties)) %>%
   #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
-  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84)$xmax + (250 / 111.32) &
-                         latitude > st_bbox(us_counties_wgs84)$ymin - (250 / 111.32))) %>%
+  mutate(us_contact = (longitude < st_bbox(us_counties_wgs84_atlantic)$xmax + (250 / 111.32) &
+                         latitude > st_bbox(us_counties_wgs84_atlantic)$ymin - (250 / 111.32))) %>%
   #mutate(us_contact = st_is_within_distance(., st_union(us_counties), dist = 250000 )) %>%
   #mutate(us_contact = st_intersects(geometry, us_counties_buffer)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%

@@ -2,6 +2,10 @@
   # temporarily using a older, pre-processed set of storm data
     # CLIMADA date/time issues
 
+load("storm_10k_obs_na_all_proc_ggw.rda")
+  # Misleading name; just one set of dates
+  # how much time do I want to commit to working out the parlapply issues?
+
 
 # seeing if the longitude format (seems to show degrees west as deg. east + west)
   # whereas the `floyd_tracks` dataset shows it as negative degrees east
@@ -17,6 +21,12 @@
 # Decided to add 'historical' data as a point of reference
   # either of ~primary interest, or as more of a ~supplemental thing
 
+# suggested code to stop ~unresolved parallel processing operations:
+unregister_dopar <- function() {
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+}
+
 
 load("01_data/storm_hist_proc_hurricane_64_knots_plus.rda")
 # filtered w/ same conditions (minus landfall) as simualted data
@@ -30,7 +40,8 @@ start <- Sys.time()#proc.time()
 cl <- makeCluster(7) # 8 for ~full utilization
 storm_hist_proc_hurricane_split_ggw <- parLapply(cl,
                                                        (storm_hist_proc_hurricane_split),
-                                                       get_grid_winds)
+                                                       #get_grid_winds)
+                                                      ggw_trycatch)
 stopCluster(cl)
 end <- Sys.time() #proc.time()
 print(end - start) 
@@ -58,15 +69,78 @@ save(storm_hist_proc_hurricane_ggw, file = "01_data/storm_hist_proc_hurricane_gg
 
 # Trying full 10k years (should rename current 1k test)
 
+load(file = "01_data/storm_10k_all_obs_na_proc_hurricane.rda")
 
-storm_10k_all_obs_na_proc_hurricane_split <- split(storm_10k_all_obs_na_proc_hurricane,
-                                               f = storm_10k_all_obs_na_proc_hurricane$storm_id)
+#storm_10k_all_obs_na_proc_hurricane <- storm_10k_all_obs_na_proc_hurricane %>%
+#    group_by(storm_id) %>%
+#    add_tally() %>%
+#    filter(n > 3) %>% # doubt it's this simple, but worth a shot
+#    dplyr::select(-n)
+  # just checked, and at least `get_grid_winds` runs fine with as few as 2 time points in historical data
+    # so either an interpolation error or some yet-undetected error
+
+# OK, remember to remove this step, but going to go through the year sets
+  # to try and spot the issue
+  # I *think* the set I've been working with longest is `2`?, so can assume that one works
+
+###
+  # still subsetting
+storm_10k_all_obs_na_proc_hurricane_TMP <- storm_10k_all_obs_na_proc_hurricane %>%
+  filter(str_detect(storm_id, "-9$"))
+  # I guess keep the names downstream the same?
+storm_10k_all_obs_na_proc_hurricane_split <- split(storm_10k_all_obs_na_proc_hurricane_TMP,
+                                               f = storm_10k_all_obs_na_proc_hurricane_TMP$storm_id)
+
+ggw_trycatch <- function (data) {
+  return(tryCatch(stormwindmodel::get_grid_winds(data),
+                  error=function(e) {
+                    err_df <- data.frame(
+                      gridid = "ERROR",
+                      date_time_max_wind = as.Date("1000-01-01 01:00:00 UTC"),
+                      vmax_sust = 999,
+                      vmax_gust = 999,
+                      sust_dur = 999,
+                      gust_dur = 999
+                    )
+                    return(err_df)
+                  }
+                  ))
+}
+
+# trying a simpler version of the error output? 
+
+ggw_trycatch2 <- function (data) {
+  return(tryCatch(stormwindmodel::get_grid_winds(data),
+                  error = function(e) {
+                    # code that will be executed in the event of an error
+                    return(NA)
+                  }
+  ))
+}
+
+
 
 start <- Sys.time()#proc.time()
 cl <- makeCluster(7) # 8 for ~full utilization
 storm_10k_all_obs_na_proc_hurricane_split_ggw <- parLapply(cl,
                                                        (storm_10k_all_obs_na_proc_hurricane_split),
                                                        get_grid_winds)
+                                                       #ggw_trycatch)
+
+#storm_10k_all_obs_na_proc_hurricane_split_ggw <- tryCatch({parLapply(cl,
+#                                                           (storm_10k_all_obs_na_proc_hurricane_split),
+#                                                           get_grid_winds)}, 
+#                                                          error = function(cond) {
+#                                                             message(cond)
+#                                                             return(NA)
+#                                                           },
+#                                                          warning = function(cond) {
+#                                                            message(cond)
+#                                                            return(NULL)
+#                                                          }
+
+#                                                          )
+
 stopCluster(cl)
 end <- Sys.time() #proc.time()
 print(end - start) 
@@ -109,7 +183,7 @@ Sys.time()
 
 storm_10k_obs_na_all_proc <- storm_10k_obs_na_all_proc %>%
   add_tally() %>%
-  filter(n > 3) %>% # doubt it's this simple, but worth a shot
+  filter(n > 4) %>% # doubt it's this simple, but worth a shot
   dplyr::select(-n)
 
 storm_10k_obs_na_all_proc_split <- split(storm_10k_obs_na_all_proc,
