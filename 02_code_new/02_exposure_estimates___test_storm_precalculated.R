@@ -2,7 +2,7 @@
   # temporarily using a older, pre-processed set of storm data
     # CLIMADA date/time issues
 
-load("storm_10k_obs_na_all_proc_ggw.rda")
+#load("storm_10k_obs_na_all_proc_ggw.rda")
   # Misleading name; just one set of dates
   # how much time do I want to commit to working out the parlapply issues?
 
@@ -28,9 +28,13 @@ unregister_dopar <- function() {
 }
 
 
-load("01_data/storm_hist_proc_hurricane_64_knots_plus.rda")
+#load("01_data/storm_hist_proc_hurricane_64_knots_plus.rda")
+load(file = "01_data/storm_10k_obs_na_proc_hurricane_CORRECTED.rda")
+load(file = "01_data/storm_hist_proc_hurricane_CORRECTED.rda")
 # filtered w/ same conditions (minus landfall) as simualted data
 # called "storm_hist_proc_hurricane"
+
+#oh, check which windspeed filtering this is using
 
 
 storm_hist_proc_hurricane_split <- split(storm_hist_proc_hurricane,

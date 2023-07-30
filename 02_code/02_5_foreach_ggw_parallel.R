@@ -2,34 +2,16 @@
 
 library(foreach)
 
-my.cluster <- parallel::makeCluster(
-  7#, 
-#  type = "PSOCK"  # not sure if necessary
-)
-doParallel::registerDoParallel(cl = my.cluster)
+#load("01_data/storm_hist_proc_hurricane_64_knots_plus.rda")
+load(file = "01_data/storm_10k_obs_na_proc_hurricane_CORRECTED.rda")
+load(file = "01_data/storm_hist_proc_hurricane_CORRECTED.rda")
+# filtered w/ same conditions (minus landfall) as simualted data
+# called "storm_hist_proc_hurricane"
 
-#foreach::getDoParRegistered() # checking if it works ['true']
-
-x <- foreach(
-  i = 1:10, 
-  .combine = 'c'
-) %dopar% {
-  sqrt(i)
-}
-x
-
-parallel::stopCluster(cl = my.cluster)
-
-
-
-#####################################3
-# OK, I guess might as well jump in and try the GGW data (use a subset)
-
-storm_10k_all_obs_na_proc_hurricane_TMP <- storm_10k_all_obs_na_proc_hurricane %>%
-  filter(str_detect(storm_id, "-9$"))
+#oh, check which windspeed filtering this is using
 # I guess keep the names downstream the same?
-storm_10k_all_obs_na_proc_hurricane_split <- split(storm_10k_all_obs_na_proc_hurricane_TMP,
-                                                   f = storm_10k_all_obs_na_proc_hurricane_TMP$storm_id)
+storm_10k_all_obs_na_proc_hurricane_split <- split(storm_10k_obs_na_proc_hurricane,
+                                                   f = storm_10k_obs_na_proc_hurricane$storm_id)
 
 
 start <- Sys.time()#proc.time()
@@ -53,8 +35,57 @@ print(end - start)
 
 
 Sys.time()
-storm_10k_all_obs_na_proc_hurricane_ggw <- do.call("rbind", storm_10k_all_obs_na_proc_hurricane_split_ggw)
+storm_10k_all_obs_na_proc_hurricane_ggw <- do.call("bind_rows", c(storm_10k_all_obs_na_proc_hurricane_split_ggw, .id = "id"))
 Sys.time()
+
+## OK, doesn't seem to preserve nested dataframe names like rbind, so need to merge back in;
+
+storm_ids_10_df <- data.frame(storm_id = names(storm_10k_all_obs_na_proc_hurricane_split),
+                              id = as.character(seq(1:length(storm_10k_all_obs_na_proc_hurricane_split))))
+
+storm_10k_all_obs_na_proc_hurricane_ggw <- storm_10k_all_obs_na_proc_hurricane_ggw %>%
+  left_join(storm_ids_10_df, by = "id")
+
+## historical 
+
+
+storm_hist_proc_hurricane_split <- split(storm_hist_proc_hurricane,
+                                                   f = storm_hist_proc_hurricane$storm_id)
+
+
+start <- Sys.time()#proc.time()
+
+my.cluster <- parallel::makeCluster(
+  7#, 
+  #  type = "PSOCK"  # not sure if necessary
+)
+
+storm_hist_proc_hurricane_split_ggw <- foreach(
+  i = storm_hist_proc_hurricane_split,
+  .errorhandling='pass'
+) %dopar% {
+  stormwindmodel::get_grid_winds(i)
+}
+
+
+parallel::stopCluster(cl = my.cluster)
+end <- Sys.time() #proc.time()
+print(end - start) 
+
+
+Sys.time()
+storm_hist_proc_hurricane_ggw <- do.call("bind_rows", c(storm_hist_proc_hurricane_split_ggw, .id = "id"))
+Sys.time()
+
+# re-adding storm IDs
+
+
+storm_ids_hist_df <- data.frame(storm_id = names(storm_hist_proc_hurricane_split),
+                              id = as.character(seq(1:length(storm_hist_proc_hurricane_split))))
+
+storm_hist_proc_hurricane_ggw <- storm_hist_proc_hurricane_ggw %>%
+  left_join(storm_ids_hist_df, by = "id")
+
 
 #####################################################################################################
 ###########################################################################################3

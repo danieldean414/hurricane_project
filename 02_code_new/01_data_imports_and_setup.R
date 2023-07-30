@@ -159,7 +159,7 @@ storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/",
 ########## OK, need to work out issues with R env. on ALPINE;
   # let's use say 1000 years for now?
 
-storm_10k_obs_list <- storm_10k_obs_list[9]
+#storm_10k_obs_list <- storm_10k_obs_list[9]
   # trying next 1000 to see how similar the subsets are
 
 #############################################################################
