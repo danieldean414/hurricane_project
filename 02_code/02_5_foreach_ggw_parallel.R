@@ -86,6 +86,10 @@ storm_ids_hist_df <- data.frame(storm_id = names(storm_hist_proc_hurricane_split
 storm_hist_proc_hurricane_ggw <- storm_hist_proc_hurricane_ggw %>%
   left_join(storm_ids_hist_df, by = "id")
 
+############3
+
+save(storm_10k_all_obs_na_proc_hurricane_ggw, file = "01_data/storm_10k_all_obs_na_proc_hurricane_ggw.rda")
+save(storm_hist_proc_hurricane_ggw, file = "01_data/storm_hist_proc_hurricane_ggw.rda")
 
 #####################################################################################################
 ###########################################################################################3

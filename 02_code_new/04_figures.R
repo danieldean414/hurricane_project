@@ -1,4 +1,16 @@
+
+
+load("01_data/test_bayesian_rowwise_95_cis.rda")
+load("01_data/test_bayesian_rowwise_hist95_cis.rda")
+
+# filtering to 1000 years to hopefully slow working times
+  # wow, already >8 Gb just loading things, though!
+test_bayesian_rowwise_95_cis_working <- test_bayesian_rowwise_95_cis %>%
+  filter(str_detect(storm_id, "^1"))
+
 # Have various exploratory plots up, but aiming to set up formal 'figures'
+
+
 
 # ~supplementary plot showing explict geographic buffer (vs 'bounding box' approach
 
@@ -20,7 +32,7 @@ ggplot() +
               st_as_sf() %>%
               st_union()))
   
-
+# not currently using; was running into issues w/ explicit geography operations
 
 
 # Figure 1: Plot of study populations, maybe other relevant traits
@@ -38,27 +50,20 @@ ggplot() +
 
 county_acs_vars_bayesian %>%
   left_join(us_counties_wgs84) %>%
-  filter(GEOID %in% storm_counties) %>%
-  left_join(counties_mort_65, by = c("GEOID" = "county_code")) %>%
+  filter(GEOID %in% unique(test_bayesian_rowwise_95_cis_working$gridid)) %>%
+#  left_join(counties_mort_65, by = c("GEOID" = "county_code")) %>%
   ggplot() +
   aes(
     geometry = geometry,
     fill = age_65_plus
   ) +
   geom_sf() +
-  theme_void()
-
-county_acs_vars_bayesian %>%
-  left_join(us_counties_wgs84) %>%
-  filter(GEOID %in% storm_counties) %>%
-  left_join(counties_mort_65, by = c("GEOID" = "county_code")) %>%
-  ggplot() +
-  aes(
-    geometry = geometry,
-    fill = population #age_65_plus
-  ) +
-  geom_sf() +
-  theme_void()
+  theme_void() + 
+  scale_fill_viridis_c() +
+  labs(
+    title = "Popualtion (65 and Older) in Atlantic TC-Exposed US Counties",
+    fill = "Residents 65 and Older"
+  )
 
 exposured_county_ids <- test_bayesian_rowwise_summarized$gridid %>% unique()
 
@@ -85,22 +90,109 @@ county_acs_vars_bayesian %>%
   sum()
 
 # exposed pop
-county_acs_vars_bayesian %>% filter(GEOID %in% exposured_county_ids) %>%
+county_acs_vars_bayesian %>% filter(GEOID %in% unique(test_bayesian_rowwise_95_cis_working$gridid)) %>%
   left_join(us_counties_wgs84) %>%
-  filter(GEOID %in% storm_counties) %>% 
+  filter(GEOID %in% (unique(test_bayesian_rowwise_95_cis_working$gridid)) ) %>% 
   dplyr::select(age_65_plus) %>% 
   sum()
+
+# 27,125,160 <-- does that seem right? 
+    # US overall has 330,000,0000 ish, so around 9% of total US population
+      # east is a lot more densely settled than West, so not implausible
 
 #coastal
 # exposed pop
-county_acs_vars_bayesian %>% filter(GEOID %in% exposured_county_ids & 
-                                      coastal == 1) %>%
+
+county_acs_vars_bayesian %>% 
+  filter(GEOID %in% unique(test_bayesian_rowwise_95_cis_working$gridid) & 
+           coastal == 1) %>%
   left_join(us_counties_wgs84) %>%
-  filter(GEOID %in% storm_counties) %>% 
+  filter(GEOID %in% (unique(test_bayesian_rowwise_95_cis_working$gridid)) ) %>% 
   dplyr::select(age_65_plus) %>% 
   sum()
 
+# 10,274,866 exposed
 
+
+# Oh, jsut realized I haven't been "saving" the code on exploratory plots;
+
+#Mean annual category 1 deaths
+test_bayesian_rowwise_hist95_cis %>%
+  unnest(data) %>%
+  filter(vmax_sust >= 32.9) %>% 
+  unnest(impact_summary) %>% 
+  group_by(gridid) %>%
+  mutate(cat_1_deaths_yr = sum(mean)/30) %>%
+  dplyr::select(gridid, cat_1_deaths_yr) %>%
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))  %>% 
+  ggplot() + aes(geometry = geometry, fill = cat_1_deaths_yr) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void()
+
+  # could also not divide by years, but then not compatible with historical vs simualted data
+
+  #I guess same issue of distributions, though...
+
+# Return periods and related
+  # I wonder if it's possible to use 1/x as the transformation? 
+
+test_bayesian_rowwise_95_cis_working %>%
+  unnest(data) %>% 
+  filter(vmax_sust >= 32.9) %>%
+  ungroup() %>% 
+  group_by(gridid) %>% 
+  add_tally() %>%  
+  dplyr::select(gridid, n) %>% 
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  mutate(return_period = 1/(n/1000)) %>%
+  ggplot() + aes(geometry = geometry, fill = return_period) +
+  geom_sf() +
+  scale_fill_viridis_c(trans = 'log') +
+  theme_void()
+
+test_bayesian_rowwise_95_cis_working %>% 
+  unnest(data) %>%
+  filter(vmax_sust >= 32.9) %>%
+  ungroup() %>% 
+  group_by(gridid) %>% 
+  add_tally() %>% 
+  dplyr::select(gridid, n) %>% 
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>%
+  mutate(return_period = 1/(n/1000)) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = return_period) + 
+  geom_sf() +
+  scale_fill_viridis_c(trans=scales::trans_new("1_over_x",
+                                               transform = function(x) {1/(x+0.0001)}, 
+                                               inverse = function(x) {-1/(x+0.0001)})) + 
+  theme_void()
+
+# or might be predefined
+
+
+test_bayesian_rowwise_95_cis_working %>% 
+  unnest(data) %>%
+  filter(vmax_sust >= 32.9) %>%
+  ungroup() %>% 
+  group_by(gridid) %>% 
+  add_tally() %>% 
+  dplyr::select(gridid, n) %>% 
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>%
+  mutate(return_period = 1/(n/1000)) %>% 
+  ggplot() + 
+  aes(geometry = geometry, fill = return_period) + 
+  geom_sf() +
+  scale_fill_viridis_c(trans= 'reciprocal') + 
+  theme_void()
+    # trying to set limits to deal with infinite; no luck so far
+        # is a transformation called ~trim_tails(?), but not sure how to apply both
+        # could figure out what it's doing numerially and write a custom function to do both 
+      # 
 
 ################################################333
   # incidentally, I wonder how close the census and CDC populations are?
