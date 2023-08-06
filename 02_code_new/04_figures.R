@@ -10,6 +10,9 @@ test_bayesian_rowwise_95_cis_working <- test_bayesian_rowwise_95_cis %>%
 
 # Have various exploratory plots up, but aiming to set up formal 'figures'
 
+# adding saffir-simpson scale to categorize risks; I guess can think through how to generalize
+
+saffir_simpson <- c(0, 74, 96, 111, 131) # maybe?
 
 
 # ~supplementary plot showing explict geographic buffer (vs 'bounding box' approach
@@ -114,7 +117,7 @@ county_acs_vars_bayesian %>%
 # 10,274,866 exposed
 
 
-# Oh, jsut realized I haven't been "saving" the code on exploratory plots;
+# Oh, jsut realized I haven't been "saving" the code on exploratory plots, etc.;
 
 #Mean annual category 1 deaths
 test_bayesian_rowwise_hist95_cis %>%
@@ -131,7 +134,70 @@ test_bayesian_rowwise_hist95_cis %>%
   scale_fill_viridis_c() + 
   theme_void()
 
+# Oh, let's see if I can ~automatically generate Saphir-simpson categories:
+
+#Mean annual category 1 deaths
+test_bayesian_rowwise_hist95_cis %>%
+  unnest(data) %>%
+  mutate(saphir_simpson = as.numeric(cut(vmax_sust, c(0,74,96,111,130,157,200)*0.44704,
+                              right = FALSE, label = FALSE))-1) %>%
+  unnest(impact_summary) %>% 
+  group_by(gridid, saphir_simpson) %>%
+  mutate(deaths_yr = sum(mean)/30) %>%
+  dplyr::select(gridid, saphir_simpson, deaths_yr) %>%
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))  %>% 
+  ggplot() + aes(geometry = geometry, fill = deaths_yr) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  facet_wrap(. ~ saphir_simpson)
+
+test_bayesian_rowwise_95_cis_working %>%
+  unnest(data) %>%
+  mutate(saphir_simpson = as.numeric(cut(vmax_sust, c(0,74,96,111,130,157,200)*0.44704,
+                                         right = FALSE, label = FALSE))-1) %>%
+  unnest(impact_summary) %>% 
+  group_by(gridid, saphir_simpson) %>%
+  mutate(deaths_yr = sum(mean)/1000) %>%
+  dplyr::select(gridid, saphir_simpson, deaths_yr) %>%
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))  %>% 
+  ggplot() + aes(geometry = geometry, fill = deaths_yr) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  facet_wrap(. ~ saphir_simpson)
+
   # could also not divide by years, but then not compatible with historical vs simualted data
+
+# Seeing if I can rearrange to get the whole map as a backdrop
+saphir_simpson_plot_data_sim <- test_bayesian_rowwise_95_cis_working %>%
+  unnest(data) %>%
+  mutate(saphir_simpson = as.numeric(cut(vmax_sust, c(0,74,96,111,130,157,200)*0.44704,
+                                         right = FALSE, label = FALSE))-1) %>%
+  unnest(impact_summary) %>% 
+  group_by(gridid, saphir_simpson) %>%
+  mutate(deaths_yr = sum(mean)/1000) %>%
+  dplyr::select(gridid, saphir_simpson, deaths_yr) %>%
+  unique() %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))
+
+ggplot() + 
+  geom_sf(aes(geometry = geometry), fill = 'grey', data = us_counties_wgs84) +
+  geom_sf(
+    aes(geometry = geometry, fill = deaths_yr),
+    data = saphir_simpson_plot_data_sim,
+    ) + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  facet_wrap(. ~ saphir_simpson)
+  
+  aes(geometry = geometry, fill = deaths_yr) +
+  geom_sf() + 
+  scale_fill_viridis_c() + 
+  theme_void() +
+  facet_wrap(. ~ saphir_simpson)
 
   #I guess same issue of distributions, though...
 
