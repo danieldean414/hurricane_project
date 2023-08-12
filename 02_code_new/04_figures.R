@@ -1,12 +1,16 @@
 
 
-load("01_data/test_bayesian_rowwise_95_cis.rda")
+#load("01_data/test_bayesian_rowwise_95_cis.rda") #full 10k yerars (runs, but very slowly)
+load("01_data/test_bayesian_rowwise_95_cis_working.rda") #1000-year version
 load("01_data/test_bayesian_rowwise_hist95_cis.rda")
+
+# OK, merged NCEI data into the WS84 version of the counties 
 
 # filtering to 1000 years to hopefully slow working times
   # wow, already >8 Gb just loading things, though!
-test_bayesian_rowwise_95_cis_working <- test_bayesian_rowwise_95_cis %>%
-  filter(str_detect(storm_id, "^1"))
+#test_bayesian_rowwise_95_cis_working <- test_bayesian_rowwise_95_cis %>%
+#  filter(str_detect(storm_id, "^1"))
+#rm(test_bayesian_rowwise_95_cis)
 
 # Have various exploratory plots up, but aiming to set up formal 'figures'
 
@@ -36,6 +40,102 @@ ggplot() +
               st_union()))
   
 # not currently using; was running into issues w/ explicit geography operations
+
+
+
+## Oh, have been keeping this too much in-console, but here are some plots by region
+
+# was originally doing states with "^\\d{2}", but realized I could merge in coastlines
+
+test_bayesian_rowwise_95_cis_working %>% 
+  unnest(impact_summary) %>%
+  ungroup() %>% 
+  unnest(data) %>% 
+  #mutate(state = str_extract(gridid, "^\\d{2}")) %>%
+  left_join(coastlines, by = c('gridid' = 'state_county_fips')) %>% 
+  ggplot() +
+  aes(x = coastline_region, y = mean,
+      color = as.factor(vmax_sust >= 32.9)) + 
+  geom_violin(draw_quantiles = c(0.5)) + 
+  theme_minimal()
+
+# NCEI regions version
+
+test_bayesian_rowwise_95_cis_working %>% 
+  unnest(impact_summary) %>%
+  ungroup() %>% 
+  unnest(data) %>% 
+  left_join(us_counties_wgs84, by = c('gridid' = 'GEOID')) %>% 
+  ggplot() +
+  aes(x = region, y = mean,
+      color = as.factor(vmax_sust >= 32.9)) + 
+  geom_violin(draw_quantiles = c(0.5)) + 
+  theme_minimal()
+
+
+
+  #why are there `NA` regions showing up here?
+    # OK, FIPS is 11001 -- Washington DC, so not technically a state
+    # seems like you'd want to fold it into the SE?
+
+
+# NCEI regions version
+
+# states -- need some way to organize other than alphabetical 
+
+test_bayesian_rowwise_95_cis_working %>% 
+  unnest(impact_summary) %>%
+  ungroup() %>% 
+  unnest(data) %>% 
+  left_join(us_counties_wgs84, by = c('gridid' = 'GEOID')) %>% 
+  ggplot() +
+  aes(x = state, y = mean,
+      color = as.factor(vmax_sust >= 32.9)) + 
+  geom_violin(draw_quantiles = c(0.5)) + 
+  theme_minimal()
+
+
+# Oh, still need some way to associate written states w/ the FIPS codes
+  # OK, us_counties/etc. should still have it
+
+# trying for composite 'person-exposure' metric
+
+# first pass, at least; double-check math, but should be same general operations
+
+sim_person_exposures <- test_bayesian_rowwise_95_cis_working %>% 
+  unnest(data) %>% 
+  unnest(impact_summary) %>% 
+  mutate(hurricane = as.factor(vmax_sust >= 32.9)) %>% 
+  ungroup() %>% 
+  dplyr::select(gridid, vmax_sust,
+                hurricane, age_65_plus, mean) %>% 
+  group_by(gridid, hurricane) %>% 
+  mutate(annual_deaths = sum(mean)/1000, exposures = n()) %>% 
+  dplyr::select(gridid, hurricane,
+                age_65_plus, annual_deaths, exposures) %>% 
+  unique() %>% 
+  mutate(person_exposures_yr = age_65_plus * exposures/1000) 
+
+sim_person_exposures %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot()+
+  aes(geometry = geometry, fill = exposures) + geom_sf() + scale_fill_viridis_c() +
+  facet_wrap(. ~ hurricane)
+
+sim_person_exposures %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot()+
+  aes(geometry = geometry, fill = age_65_plus) + geom_sf() +
+  scale_fill_viridis_c()
+
+
+sim_person_exposures %>% 
+  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
+  ggplot()+
+  aes(geometry = geometry, fill = person_exposures_yr) +
+  geom_sf() + 
+  scale_fill_viridis_c() +
+  facet_wrap(. ~ hurricane)
 
 
 # Figure 1: Plot of study populations, maybe other relevant traits
@@ -184,20 +284,51 @@ saphir_simpson_plot_data_sim <- test_bayesian_rowwise_95_cis_working %>%
   left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))
 
 ggplot() + 
-  geom_sf(aes(geometry = geometry), fill = 'grey', data = us_counties_wgs84) +
+  geom_sf(aes(geometry = geometry), fill = 'grey', color = 'grey80', 
+          data = (us_counties_wgs84 %>%
+            filter(GEOID %in% 
+                     unique(c(unique(test_bayesian_rowwise_95_cis_working$gridid)),
+                              unique(test_bayesian_rowwise_hist95_cis$gridid)) )
+            ))+
   geom_sf(
     aes(geometry = geometry, fill = deaths_yr),
     data = saphir_simpson_plot_data_sim,
     ) + 
   scale_fill_viridis_c() + 
   theme_void() +
-  facet_wrap(. ~ saphir_simpson)
+  facet_wrap(. ~ saphir_simpson) + 
+  scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red', limits = c(-12, 12))
   
-  aes(geometry = geometry, fill = deaths_yr) +
-  geom_sf() + 
-  scale_fill_viridis_c() + 
-  theme_void() +
-  facet_wrap(. ~ saphir_simpson)
+  
+  # historical
+  
+  saphir_simpson_plot_data_hist <- test_bayesian_rowwise_hist95_cis %>%
+    unnest(data) %>%
+    mutate(saphir_simpson = as.numeric(cut(vmax_sust, c(0,74,96,111,130,157,200)*0.44704,
+                                           right = FALSE, label = FALSE))-1) %>%
+    unnest(impact_summary) %>% 
+    group_by(gridid, saphir_simpson) %>%
+    mutate(deaths_yr = sum(mean)/30) %>%
+    dplyr::select(gridid, saphir_simpson, deaths_yr) %>%
+    unique() %>% 
+    left_join(us_counties_wgs84, by = c("gridid" = "GEOID"))
+  
+  ggplot() + 
+    geom_sf(aes(geometry = geometry), fill = 'grey', color = 'grey80', 
+            data = (us_counties_wgs84 %>%
+                      filter(GEOID %in% 
+                               unique(c(unique(test_bayesian_rowwise_95_cis_working$gridid)),
+                                      unique(test_bayesian_rowwise_hist95_cis$gridid)) )
+            ))+
+    geom_sf(
+      aes(geometry = geometry, fill = deaths_yr),
+      data = saphir_simpson_plot_data_hist,
+    ) + 
+    scale_fill_viridis_c() + 
+    theme_void() +
+    facet_wrap(. ~ saphir_simpson) + 
+    scale_fill_gradient2(low = 'blue', mid = 'white', high = 'red')
+  
 
   #I guess same issue of distributions, though...
 

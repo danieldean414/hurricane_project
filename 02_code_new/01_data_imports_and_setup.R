@@ -82,6 +82,20 @@ coastlines <- read.xlsx("01_data/coastline-counties-list.xlsx", colNames = TRUE,
 #us_counties_nad83 <- st_transform(us_counties, crs = "NAD83")
 us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
+# seeing if I can merge in the NCEI cliamte regions at this end
+
+ncei_regions <- read_csv("01_data/ncei_climate_regions.csv", col_names = TRUE) %>%
+  mutate(across(where(~is.character(.)), ~str_remove_all(., "\\s\\(\\d*\\)")))
+
+us_counties_wgs84 <- us_counties_wgs84 %>% 
+  mutate(state = str_extract(NAME, "[A-Z][A-Za-z\\s]*$")) %>%
+  left_join(ncei_regions, by = "state") %>%
+  mutate(region = case_when(GEOID == "11001" ~ "Northeast", GEOID != "11001" ~ region) )
+
+# OK, Washington DC (11001) shows up as "NA"; seems like it should be in the Norhteast?
+
+  # NAs are Alaska, Hawai'i, etc.
+
 # OK, this includes islands; filtering down to just Atlantic, GoM, coastsL
 
 us_counties_wgs84_atlantic <- (us_counties_wgs84 %>% 
@@ -657,6 +671,8 @@ exposure_draft1 <- hurricaneexposuredata::storm_winds %>%
   # adding an extra variable for actual population age 65+; don't think that should cause any issues
     # didn't seem to; another for mortality rates
     # also has full county names--I guess more convenient
+
+load(file = "01_data/county_acs_vars.rda")
 county_acs_vars_bayesian <- county_acs_vars %>%
   filter(!is.na(estimate)) %>%
   select(-moe) %>%
@@ -721,6 +737,9 @@ county_acs_vars_bayesian <- county_acs_vars %>%
       # could put in '0', but don't know if that would cause extrapolation issues
 
 # last 3 lines are pulling in storm simulation data; I guess could run that 'upstream'
+
+
+save(county_acs_vars_bayesian, file = "01_data/county_acs_vars_bayesian.rda")
 
 # model object
 
