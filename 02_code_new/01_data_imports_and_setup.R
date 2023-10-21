@@ -86,11 +86,31 @@ us_counties_wgs84  <- st_transform(us_counties, crs = "WGS84")
 
 ncei_regions <- read_csv("01_data/ncei_climate_regions.csv", col_names = TRUE) %>%
   mutate(across(where(~is.character(.)), ~str_remove_all(., "\\s\\(\\d*\\)")))
+load(file = "states_order.rda")
 
 us_counties_wgs84 <- us_counties_wgs84 %>% 
-  mutate(state = str_extract(NAME, "[A-Z][A-Za-z\\s]*$")) %>%
+  mutate(state = (str_extract(NAME, "[A-Z][A-Za-z\\s]*$"))) %>%
   left_join(ncei_regions, by = "state") %>%
-  mutate(region = case_when(GEOID == "11001" ~ "Northeast", GEOID != "11001" ~ region) )
+  mutate(state = fct_relevel(as.factor(state), states_order)) %>%
+  mutate(region = case_when(GEOID == "11001" ~ "Northeast",
+                            GEOID != "11001" ~ region) ) # setting DC to NE region
+
+# another ~out-of-order element I need to untangle eventually
+#save(states_order, file = "states_order.rda")
+states_order <- (us_counties_wgs84 %>% 
+                   dplyr::select(state, geometry) %>%
+                   group_by(state) %>%
+                   mutate(geometry = st_union(geometry)) %>%
+                   unique() %>%
+                   mutate(latitude = st_centroid(geometry)[[1]][[2]]) %>%
+                   arrange(desc(latitude)))$state
+
+# organizing states by latitude
+
+# can I set order by latitude?
+
+  # takes longer than it probably should...
+
 
 # OK, Washington DC (11001) shows up as "NA"; seems like it should be in the Norhteast?
 

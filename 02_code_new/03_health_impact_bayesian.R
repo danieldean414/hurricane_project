@@ -522,15 +522,10 @@ test_bayesian_rowwise_hist_95_cis %>%
   scale_fill_viridis_c() + 
   theme_void()
 
-test_bayesian_rowwise_95_cis %>% 
-  unnest(data) %>% 
-  group_by(gridid) %>% dplyr::select(poverty_prop:population_density) %>% unique()  %>%
-  left_join(us_counties_wgs84, by = c("gridid" = "GEOID")) %>% 
-  ggplot() + 
-  aes(geometry = geometry, fill = age_65_plus) +
-  geom_sf() + 
-  scale_fill_viridis_c(trans = 'log') + 
-  theme_void()
+
+# Population map
+
+
 
 # huh--still seeing more negatives than not; I guess double check inclusion criteria?
   # oh, I'm filtering per-storm instead of per-timestep, so it's storms that reach at least that 32.9 m/s
