@@ -3,6 +3,10 @@
 
 # Trying to get 95% CI assuming a normal distirubiton
 
+  # OK, kind of unsure about this;
+  # Gives much narrower CIs than a quantile approach
+  # let's just use quantiles to be on the ~safe side
+
 get_95_ci <- function(data_in){
   s_d = sd(data_in, na.rm = TRUE)
   error = qnorm(0.975)*s_d/sqrt(length(data_in))
@@ -16,6 +20,13 @@ get_95_ci <- function(data_in){
   return(sd_obj)
 }
 
+########################################################3
+#### Ok, adding new section -- remember it's easier than I'd thought 
+  # to get quantiles from the ~nested predictions, so less important
+  # to generate summaries as part of the process
+
+
+load(file = "storm_2k_all_obs_na_proc_split_ggw.rda")
 
 #################################################################33
   # !: Want to make sure it follows same filtering criteria

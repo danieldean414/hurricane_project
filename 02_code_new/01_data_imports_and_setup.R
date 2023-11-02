@@ -23,9 +23,16 @@ library(hurricaneexposuredata)
 #library(PCICt)
 
 
+load("02_code/modobj.RData")
+
+source("02_code_new/pred_function.R")
+#both from Dr. Nethery
+
 ########## Data
 
 # Counties -- moving up so I can filter by geometry
+
+
 
 us_counties <- get_acs(
   geography = "county",
@@ -211,9 +218,360 @@ storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/",
   # explicit 250km buffer
 
 storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
-  # trying to think through an efficient way to add some index for set of years
+####################################################################3
+#########################################################################
+
+
+## S T O P    H E R E    A N D   S K I P  TO `storm_10k_obs_na_proc`
+  # then subset to maybe 2k years; ~11000 storms seems to be around
+  # the upper limit, so work out how to get to that 
+    # don't *have* to use full 1000-year blocks, I suppose 
+
+# for dissertation
+
+#######################################################################
+#######################################################################
+  
+# huh--45,671 storms? Weren't there >100,000??
+  # and 47740 now? can't think of what I would have changed
+
+names(storm_10k_obs_na) <- storm_names
+
+storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  dplyr::select(-change) %>%
+  mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(year, tc_number, year_set) %>%
+  #dplyr::filter(sum(landfall) > 1) %>%
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
+  #add_tally() %>%
+  #filter(n > 2) %>%
+  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  ungroup() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          year_set,
+                          sep = "-"),
+         #wind = max_wind_speed / 1.852 # converting km/h to knots
+         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           )) %>% #,
+  #longitude = longitude -360) %>%# also seems to work as-is?
+  select(storm_id, date, latitude, longitude, wind)
+
+storm_10k_obs_na_proc_full <- storm_10k_obs_na_proc
+
+
+# so ~4700 storms/yr, +/- 100 or so; maybe pick 2 randomly?
+
+set.seed(111)
+sample(x = 1:10, size = 2) # 4, 3
+
+
+# Oh! I didn't include any of the geographic filtering--no wonder it 
+  # took so long!
+storm_2k_obs_na_proc <- storm_10k_obs_na_proc %>%
+  group_by(storm_id) %>%
+  add_count("timesteps") %>%
+  dplyr::filter(timesteps > 1)
+  filter(str_detect(storm_id, "[3|4]$")) # 
+
+save(storm_2k_obs_na_proc, file = "storm_2k_obs_na_proc.rda")
+
+#########################################################3###########33
+###################################################################
+
+
+###############################################################################################################
+
+######### County data <-- now that I'm using placeholder storm data, *could* combine at this stage
+# once the date/time issue is corrected, maybe run that process first in a separate script?
+
+# counties (should default to 2020)
+
+#us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) %>% # To avoid high-res versions
+#  clean_names()
+
+
+
+# Baseline mortality data for >=65 (should double check if there are any later versions)
+counties_mort_65 <- read_tsv("01_data/Multiple Cause of Death, 2018-2021, Single Race_2019_only.txt") %>%
+  dplyr::select(-Notes) %>%
+  clean_names()
+
+# might as well merge all county data this stage, I think
+
+# Setting up county variables for model
+# original approach manually pulled from a downloaded Excel document; think I can get these with the tidycensus package
+# maybe replace tigris should be the same county data
+
+# some of these will have to come from TC and/or windfield models
+
+##  vmax_sust: modeled maximum sustained wind speed at the population centroid of the county during the TC in m/s (from hurricaneexposuredata package)
+##  sust_dur: duration of sustained wind speeds above 20 m/s at the population centroid of the county during the TC (from hurricaneexposuredata package)
+##  exposure: total number of TC exposures experienced by the county during 1999-2015 (derived from hurricaneexposuredata package)
+##  poverty_prop: proportion of residents in poverty          
+##  white_prop: proportion of residents identifying as white
+##  owner_occupied_prop: proportion of homes that are owner-occupied
+##  age_pct_65_plus_prop: proportion of residents age 65+
+##  median_age: county median age
+##  population_density: county population density
+##  median_house_value: county median house value
+##  no_grad_prop: proportion of residents without a high school diploma
+##  year: year the TC occurred
+##  coastal: whether the county is coastal (0/1)
+
+# manually getting populations 65+
+# oh, would be downstream, but may need to filter by minimum population
+
+# Sort of a ~'vestigial' step, but pulling in a table of ACS5 metadata 
+# (vs looking up in `tidycensus`) for now
+# not sure whether to stick with 2020 ACS5 data, or the dicennial census (different variable names)
+
+#tidycensus::load_variables(year = 2020, dataset = 'pl')
+# not sure if I'm missing something, but looks like they don't have full data, so stick with ACS5?
+
+acs_vars <- read_xlsx("01_data/ACS2019_Table_Shells.xlsx")
+
+age_pct_65_plus_ids <- acs_vars %>%
+  clean_names() %>%
+  filter(table_id == "B01001" &
+           stub %in% c("65 and 66 years",
+                       "67 to 69 years",
+                       "70 to 74 years",
+                       "75 to 79 years",
+                       "80 to 84 years",
+                       "85 years and over") ) %>%
+  dplyr::select(-data_release)
+
+county_acs_vars <- tidycensus::get_acs(geography = 'county',
+                                       variables = c("B06012_001", 
+                                                     "B06012_002",
+                                                     "B02001_002",
+                                                     "B02001_001",
+                                                     "B07013_002",
+                                                     "B07013_001",
+                                                     age_pct_65_plus_ids$unique_id,
+                                                     "B01001_001",
+                                                     "B01002_001",
+                                                     "B25077_001",
+                                                     "B06009_002",
+                                                     "B06009_001"
+                                       ),
+                                       year = 2020,
+                                       survey = "acs5",
+                                       geometry = FALSE)
+# did I delete a line here? Piped straight into the saving step
+
+save(county_acs_vars, file = "01_data/county_acs_vars.rda") # just in case I need to reload offline
+
+
+
+#####################################################################################################
+## Probably could remove ~functionally, but could be useful for methods
+
+# Adding a step to help keep track of where all the 'NA' results are coming from downstream
+# *possible* it's just replication of these
+# variables are:
+# B06009_001/2: used to estimate % with HS degree
+# B06012_001/2: % below poverty
+# B07013_1/2: % in ownder-occupied housing
+# B25077: Median housing value (USD)
+
+#######################################333
+
+
+# OK, let's remove those and see if that stops the propagation of NAs
+
+us_counties %>% mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>%
+  ggplot() + aes(geometry = geometry, fill = missing_data) %>% geom_sf(color = NA) + theme_void() 
+
+county_acs_vars_na <- county_acs_vars %>% filter(is.na(estimate))
+county_acs_vars_moe_na <- county_acs_vars %>% filter(is.na(moe))
+
+# OK, 78 missing counties for everything but B25077_001, which only has 5 missing
+
+
+# That's odd--so I see the 78 unique IDs for missing data
+unique(county_acs_vars_na$GEOID)
+# but if I try matching it to `us_counties`, I only get 5:
+us_counties %>% 
+  mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>%
+  filter(missing_data == TRUE)
+
+# ohh-that makes sense; it's that the majority are Puerto Rico's counties
+# mapping remaining counties--looks like 4 in continental US, maybe 1 that's realistically exposed 
+
+# ~non-territorial US counties are:
+# Kalawao County, Hawaii  (?)
+# Buffalo County, South Dakota: pop 1,948       
+# Mellette County, South Dakota: pop 1,918
+# Kenedy County, Texas: pop ~350
+# Loving County, Texas: pop ~64
+
+#######################################################################################
+#######################################################################################
+
+### Temporary (maybe load from a separate, earlier file)
+# Oh, this is just the estimate for # exposures; so *could* keep from historical data
+
+exposure_draft1 <- hurricaneexposuredata::storm_winds %>% 
+  mutate(storm_year = str_extract_all(storm_id, "[0-9]{4}")) %>%
+  filter(storm_year %in% c(1999:2020) & vmax_sust > 17.4) %>% # double-check that this aligns with current model
+  select(fips, storm_id) %>%
+  unique() %>%
+  group_by(fips) %>%
+  dplyr::summarize(exposure = n()) %>%
+  mutate(exposure = replace_na(exposure, 1)) # maybe 0? Also out of training data's range
+
+# need to decide how to handle 
+
+###
+# adding an extra variable for actual population age 65+; don't think that should cause any issues
+# didn't seem to; another for mortality rates
+# also has full county names--I guess more convenient
+
+load(file = "01_data/county_acs_vars.rda")
+county_acs_vars_bayesian <- county_acs_vars %>%
+  filter(!is.na(estimate)) %>%
+  select(-moe) %>%
+  pivot_wider(names_from = variable,
+              values_from = estimate) %>%
+  mutate(poverty_prop = B06012_002 / B06012_001,
+         white_prop = B02001_002 / B02001_001,
+         owner_occupied_prop = B07013_002 / B07013_001,
+         age_65_plus = (B01001_020 +
+                          B01001_021 +
+                          B01001_022 +
+                          B01001_023 +
+                          B01001_024 +
+                          B01001_025 +
+                          B01001_044 +
+                          B01001_045 +
+                          B01001_046 +
+                          B01001_047 +
+                          B01001_048 +
+                          B01001_049),
+         age_pct_65_plus_prop = age_65_plus / B01001_001,
+         median_age = B01002_001,
+         median_house_value = B25077_001,
+         no_grad_prop = B06009_002 / B06009_001
+  ) %>%
+  left_join(clean_names(coastlines), by = c("GEOID" = "state_county_fips")) %>%
+  inner_join(us_counties) %>% #, by = c("GEOID" = "geoid")) %>%
+  filter(!is.na(median_house_value)) %>%
+  mutate(aland = as.numeric(st_area(geometry))) %>%
+  mutate(population_density = B01001_001 / (aland * 0.00000038610), # looks like m^2 --> miles^2
+         coastal = as.numeric(!is.na(coastline_region)),
+         year = 2015, # why is year 2015?
+         #year = sample(2006:2015, size = 1, replace = T),
+         #exposure = median(modobj$data$exposure)) %>%
+  ) %>%
+  left_join(exposure_draft1, by = c("GEOID" = "fips")) %>%
+  select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value) %>%
+  mutate(exposure = replace_na(exposure, 0)) %>% # 1 or 0? (0 seems to be 'out of scope')
+  left_join(counties_mort_65, by = c("GEOID" = "county_code"))
+
+# Huh--somehow gives a few "infinite" population densities; maybe 0 people??
+# *Still 5 NA's for median house vale, 78 for no_grad_pop, etc.
+# so still getting those NA's; make sure I saved filtered version 
+# might be pulling in somewhere else?
+# oh, maybe it's that those values are *missing* 
+
+# Using a `right_join` operation yields up to 9 NAs; 4 for most
+# All dated 2015
+
+# 46113: ~retired code for Shannon County, SD (FIPS code = 46113); 
+# renamed to Oglala Lakota County (FIPS 46102).          
+# 51515: Bedford City County, VA
+# 02261: Valdez-Cordova County, AK        
+# 02270: Wade Hampton Census Area 02270 FIPS Code, Alaska 
+# possibly renamed to Kusilvak?
+
+#!! Not sure how it will handle unexposed counties (exposure = NA); I guess a bit ~tautologically, only exposed counties
+# are in the `modobj` dataset
+# maybe filter out? Although seems possible that there'd be impacts on countied not in the 
+# 1999-2015 window
+# or bump up to one; arbitrary, but I'd guess 1 and 0 impacts would look similar?
+# could put in '0', but don't know if that would cause extrapolation issues
+
+# last 3 lines are pulling in storm simulation data; I guess could run that 'upstream'
+
+
+save(county_acs_vars_bayesian, file = "01_data/county_acs_vars_bayesian.rda")
+
+# model object
+
+
+
+
+
+#               #
+  #           #
+    #       #
+      #   #
+        #
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# trying to think through an efficient way to add some index for set of years
   # seem to have hit memory limit (~3 GB); doesn't seem to let me read them in again
   
+
 # try:
 #storm_10k_obs_na <- dplyr::bind_rows(read_csv(storm_10k_obs_list, col_names = FALSE), .id = 'year_set')
   # oh, turns out `rbind` is superfluous, so already just one dataframe
@@ -246,7 +604,7 @@ storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
   #mutate(us_contact = st_intersects(geometry, us_counties_buffer)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%
   group_by(year, tc_number, year_set) %>%
-  dplyr::filter(sum(landfall) > 1) %>%
+  #dplyr::filter(sum(landfall) > 1) %>%
   dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
   mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
   dplyr::mutate(cross_sum = cumsum(cross),
@@ -257,7 +615,8 @@ storm_10k_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
                cross_sum == max_cross_sum)) %>%
   #add_tally() %>%
   #filter(n > 2) %>%
-  filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  filter(sum(us_contact) > 1) %>%
   ungroup() %>%
   mutate(wind = max_wind_speed * 1.9438444924) %>% # converting m/s to knots
   mutate(year = year + 1,
@@ -425,7 +784,9 @@ storm_10k_all_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
   select(storm_id, date, wind, latitude, longitude) # not sure if this will cause problems
 
 
-save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_proc_hurricane.rda")
+#save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_proc_hurricane.rda")
+save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_proc_hurricane_NO_LANDFALL.rda")
+
 #st_intersection(storm_10k_obs_na_proc_hurricane, st_buffer(us_counties_wgs84, ))
 
 
@@ -448,7 +809,7 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
   mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%
   group_by(year, tc_number, year_set) %>%
-  dplyr::filter(sum(landfall) > 1) %>%
+  #dplyr::filter(sum(landfall) > 1) %>%
   dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
   mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
   dplyr::mutate(cross_sum = cumsum(cross),
@@ -486,6 +847,17 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
          #longitude = longitude -360) %>%# also seems to work as-is?
   select(storm_id, date, latitude, longitude, wind)
 
+
+# checking # of storms
+storm_10k_obs_na  %>%   mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>% 
+  dplyr::select(year, year_set, tc_number) %>% 
+  unique() %>% 
+  mutate(storm_id = paste(year, year_set, tc_number)) %>%
+  dplyr::select(storm_id) %>% 
+  unique() %>% 
+  dim()
 
 # Retaining all data
 storm_10k_obs_na_all_proc <- storm_10k_obs_na  %>%
@@ -543,229 +915,5 @@ storm_10k_obs_na_all_proc <- storm_10k_obs_na  %>%
 ###########################################################################################################
 
 
-###############################################################################################################
-
-######### County data <-- now that I'm using placeholder storm data, *could* combine at this stage
-      # once the date/time issue is corrected, maybe run that process first in a separate script?
-
-# counties (should default to 2020)
-
-#us_counties <- tigris::counties(cb = TRUE, progress_bar = FALSE) %>% # To avoid high-res versions
-#  clean_names()
-
-
-
-# Baseline mortality data for >=65 (should double check if there are any later versions)
-counties_mort_65 <- read_tsv("01_data/Multiple Cause of Death, 2018-2021, Single Race_2019_only.txt") %>%
-  dplyr::select(-Notes) %>%
-  clean_names()
-
-# might as well merge all county data this stage, I think
-
-# Setting up county variables for model
-  # original approach manually pulled from a downloaded Excel document; think I can get these with the tidycensus package
-    # maybe replace tigris should be the same county data
-
-  # some of these will have to come from TC and/or windfield models
-
-##  vmax_sust: modeled maximum sustained wind speed at the population centroid of the county during the TC in m/s (from hurricaneexposuredata package)
-##  sust_dur: duration of sustained wind speeds above 20 m/s at the population centroid of the county during the TC (from hurricaneexposuredata package)
-##  exposure: total number of TC exposures experienced by the county during 1999-2015 (derived from hurricaneexposuredata package)
-##  poverty_prop: proportion of residents in poverty          
-##  white_prop: proportion of residents identifying as white
-##  owner_occupied_prop: proportion of homes that are owner-occupied
-##  age_pct_65_plus_prop: proportion of residents age 65+
-##  median_age: county median age
-##  population_density: county population density
-##  median_house_value: county median house value
-##  no_grad_prop: proportion of residents without a high school diploma
-##  year: year the TC occurred
-##  coastal: whether the county is coastal (0/1)
-
-  # manually getting populations 65+
-    # oh, would be downstream, but may need to filter by minimum population
-
-# Sort of a ~'vestigial' step, but pulling in a table of ACS5 metadata 
-  # (vs looking up in `tidycensus`) for now
-  # not sure whether to stick with 2020 ACS5 data, or the dicennial census (different variable names)
-
-#tidycensus::load_variables(year = 2020, dataset = 'pl')
-  # not sure if I'm missing something, but looks like they don't have full data, so stick with ACS5?
-
-acs_vars <- read_xlsx("01_data/ACS2019_Table_Shells.xlsx")
-
-age_pct_65_plus_ids <- acs_vars %>%
-  clean_names() %>%
-  filter(table_id == "B01001" &
-           stub %in% c("65 and 66 years",
-                       "67 to 69 years",
-                       "70 to 74 years",
-                       "75 to 79 years",
-                       "80 to 84 years",
-                       "85 years and over") ) %>%
-  dplyr::select(-data_release)
-
-county_acs_vars <- tidycensus::get_acs(geography = 'county',
-                                       variables = c("B06012_001", 
-                                                     "B06012_002",
-                                                     "B02001_002",
-                                                     "B02001_001",
-                                                     "B07013_002",
-                                                     "B07013_001",
-                                                     age_pct_65_plus_ids$unique_id,
-                                                     "B01001_001",
-                                                     "B01002_001",
-                                                     "B25077_001",
-                                                     "B06009_002",
-                                                     "B06009_001"
-                                       ),
-                                       year = 2020,
-                                       survey = "acs5",
-                                       geometry = FALSE)
-  # did I delete a line here? Piped straight into the saving step
-
-save(county_acs_vars, file = "01_data/county_acs_vars.rda") # just in case I need to reload offline
-
-
-
-#####################################################################################################
-  ## Probably could remove ~functionally, but could be useful for methods
-
-# Adding a step to help keep track of where all the 'NA' results are coming from downstream
-  # *possible* it's just replication of these
-# variables are:
-  # B06009_001/2: used to estimate % with HS degree
-  # B06012_001/2: % below poverty
-  # B07013_1/2: % in ownder-occupied housing
-  # B25077: Median housing value (USD)
-
-#######################################333
-
-
-# OK, let's remove those and see if that stops the propagation of NAs
-
-us_counties %>% mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>%
-  ggplot() + aes(geometry = geometry, fill = missing_data) %>% geom_sf(color = NA) + theme_void() 
-
-county_acs_vars_na <- county_acs_vars %>% filter(is.na(estimate))
-county_acs_vars_moe_na <- county_acs_vars %>% filter(is.na(moe))
-
-# OK, 78 missing counties for everything but B25077_001, which only has 5 missing
-
-
-# That's odd--so I see the 78 unique IDs for missing data
-unique(county_acs_vars_na$GEOID)
-# but if I try matching it to `us_counties`, I only get 5:
-us_counties %>% 
-  mutate(missing_data = GEOID %in% unique(county_acs_vars_na$GEOID)) %>%
-  filter(missing_data == TRUE)
-
-# ohh-that makes sense; it's that the majority are Puerto Rico's counties
-# mapping remaining counties--looks like 4 in continental US, maybe 1 that's realistically exposed 
-
-# ~non-territorial US counties are:
-# Kalawao County, Hawaii  (?)
-# Buffalo County, South Dakota: pop 1,948       
-# Mellette County, South Dakota: pop 1,918
-# Kenedy County, Texas: pop ~350
-# Loving County, Texas: pop ~64
-
-#######################################################################################
-#######################################################################################
-
-### Temporary (maybe load from a separate, earlier file)
-  # Oh, this is just the estimate for # exposures; so *could* keep from historical data
-
-exposure_draft1 <- hurricaneexposuredata::storm_winds %>% 
-  mutate(storm_year = str_extract_all(storm_id, "[0-9]{4}")) %>%
-  filter(storm_year %in% c(1999:2020) & vmax_sust > 17.4) %>% # double-check that this aligns with current model
-  select(fips, storm_id) %>%
-  unique() %>%
-  group_by(fips) %>%
-  dplyr::summarize(exposure = n()) %>%
-  mutate(exposure = replace_na(exposure, 1)) # maybe 0? Also out of training data's range
-
-  # need to decide how to handle 
-
-###
-  # adding an extra variable for actual population age 65+; don't think that should cause any issues
-    # didn't seem to; another for mortality rates
-    # also has full county names--I guess more convenient
-
-load(file = "01_data/county_acs_vars.rda")
-county_acs_vars_bayesian <- county_acs_vars %>%
-  filter(!is.na(estimate)) %>%
-  select(-moe) %>%
-  pivot_wider(names_from = variable,
-              values_from = estimate) %>%
-  mutate(poverty_prop = B06012_002 / B06012_001,
-         white_prop = B02001_002 / B02001_001,
-         owner_occupied_prop = B07013_002 / B07013_001,
-         age_65_plus = (B01001_020 +
-                                   B01001_021 +
-                                   B01001_022 +
-                                   B01001_023 +
-                                   B01001_024 +
-                                   B01001_025 +
-                                   B01001_044 +
-                                   B01001_045 +
-                                   B01001_046 +
-                                   B01001_047 +
-                                   B01001_048 +
-                                   B01001_049),
-         age_pct_65_plus_prop = age_65_plus / B01001_001,
-         median_age = B01002_001,
-         median_house_value = B25077_001,
-         no_grad_prop = B06009_002 / B06009_001
-  ) %>%
-  left_join(clean_names(coastlines), by = c("GEOID" = "state_county_fips")) %>%
-  inner_join(us_counties) %>% #, by = c("GEOID" = "geoid")) %>%
-  filter(!is.na(median_house_value)) %>%
-  mutate(aland = as.numeric(st_area(geometry))) %>%
-  mutate(population_density = B01001_001 / (aland * 0.00000038610), # looks like m^2 --> miles^2
-         coastal = as.numeric(!is.na(coastline_region)),
-         year = 2015, # why is year 2015?
-         #year = sample(2006:2015, size = 1, replace = T),
-         #exposure = median(modobj$data$exposure)) %>%
-  ) %>%
-  left_join(exposure_draft1, by = c("GEOID" = "fips")) %>%
-  select(GEOID, poverty_prop:no_grad_prop, coastal:exposure, population_density, median_house_value) %>%
-  mutate(exposure = replace_na(exposure, 0)) %>% # 1 or 0? (0 seems to be 'out of scope')
-  left_join(counties_mort_65, by = c("GEOID" = "county_code"))
-
-# Huh--somehow gives a few "infinite" population densities; maybe 0 people??
-  # *Still 5 NA's for median house vale, 78 for no_grad_pop, etc.
-  # so still getting those NA's; make sure I saved filtered version 
-    # might be pulling in somewhere else?
-    # oh, maybe it's that those values are *missing* 
-
-# Using a `right_join` operation yeilds up to 9 NAs; 4 for most
-  # All dated 2015
-
-# 46113: ~retired code for Shannon County, SD (FIPS code = 46113); 
-  # renamed to Oglala Lakota County (FIPS 46102).          
-# 51515: Bedford City County, VA
-# 02261: Valdez-Cordova County, AK        
-# 02270: Wade Hampton Census Area 02270 FIPS Code, Alaska 
-  # possibly renamed to Kusilvak?
-
-  #!! Not sure how it will handle unexposed counties (exposure = NA); I guess a bit ~tautologically, only exposed counties
-    # are in the `modobj` dataset
-    # maybe filter out? Although seems possible that there'd be impacts on countied not in the 
-    # 1999-2015 window
-    # or bump up to one; arbitrary, but I'd guess 1 and 0 impacts would look similar?
-      # could put in '0', but don't know if that would cause extrapolation issues
-
-# last 3 lines are pulling in storm simulation data; I guess could run that 'upstream'
-
-
-save(county_acs_vars_bayesian, file = "01_data/county_acs_vars_bayesian.rda")
-
-# model object
-
-load("02_code/modobj.RData")
-
-source("02_code_new/pred_function.R")
-  #both from Dr. Nethery
 
 
