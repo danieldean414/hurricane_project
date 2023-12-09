@@ -1,10 +1,29 @@
 
 # really could improve naming conventions;
   # these are the version prefiltered to storms reaching at least a cat 1 hurricane
-load("01_data/test_bayesian_rowwise_95_cis.rda") #full 10k years (runs, but very slowly)
-load("01_data/test_bayesian_rowwise_95_cis_working.rda") #1000-year version
+#load("01_data/test_bayesian_rowwise_95_cis.rda") #full 10k years (runs, but very slowly)
+#load("01_data/test_bayesian_rowwise_95_cis_working.rda") #1000-year version
 
-test_bayesian_rowwise_95_cis <- test_bayesian_rowwise_95_cis %>% filter(str_detect(storm_id, "[3|4]$"))
+load(file = "01_data/test_bayesian_rowwise_95_cis_2K.rda")
+test_bayesian_rowwise_95_cis_2k <- test_bayesian_rowwise_storm_95_cis
+  # for later: should set up months as a 'native' column
+
+
+load(file = "01_data/test_bayesian_rowwise_95_cis_hist.rda")
+test_bayesian_rowwise_95_cis_hist <- test_bayesian_rowwise_hist_95_cis
+  # I guess should have matched names upstream
+
+#rm(test_bayesian_rowwise_95_cis) # I guess downside of recycling names
+  # probably better to just name appropriately the 1st time
+
+load("us_counties_wgs84.rda")
+
+  # also version w/o the summary column, but I guess may as well use it
+  # so 200 decades -- maybe "hard code" with a paramter up-front?
+
+n_decades <- 2000/10 # just to minimize chances of mixing up...
+
+#test_bayesian_rowwise_95_cis <- test_bayesian_rowwise_95_cis %>% filter(str_detect(storm_id, "[3|4]$"))
   # shortening for ~testing purposes
   # so now represent 2000 years, nominally
 
@@ -15,13 +34,13 @@ test_bayesian_rowwise_95_cis <- test_bayesian_rowwise_95_cis %>% filter(str_dete
 
 # loads from test_bayesian_rowwise_95_cis_working.rda
 
-test_bayesian_rowwise_95_cis <- test_bayesian_rowwise_95_cis_working %>% 
-  filter(as.numeric(str_extract(storm_id, "\\d{4}")) <= 100)
+#test_bayesian_rowwise_95_cis <- test_bayesian_rowwise_95_cis_working %>% 
+#  filter(as.numeric(str_extract(storm_id, "\\d{4}")) <= 100)
 
 #just under 1/10th the length, so checks out; still ~55k rows
 
-save(test_bayesian_rowwise_95_cis, 
-     file = "test_bayesian_rowwise_95_cis_100_yr.rda")
+#save(test_bayesian_rowwise_95_cis, 
+#     file = "test_bayesian_rowwise_95_cis_100_yr.rda")
 
 # Since I'm going to be rerunning anyway, no real reason to use 1000 yrs
   # let's try e.g. 100 so I can get through planning/trial steps faster
@@ -36,6 +55,12 @@ save(test_bayesian_rowwise_95_cis,
 ##############################################################
 
 
+# OK, so thinking about how to handle uncertainty again;
+  # initial approach of just pooling all impacts doesn't seem well-founded
+  # in that at nothing else, counties have ~fixed traits in the model
+  # so I'd say either use a simple approach of adding e.g. all 2.5th percentiles
+  # or pool impact estimates by county for uncertainty and add across regions
+
 #geometry included in population
   # wow, already ~6 minutes w/ 100 years, so ~10 hrs with linear scaling
     # any way to pare down?
@@ -47,10 +72,759 @@ save(test_bayesian_rowwise_95_cis,
     # any way I'm missing data?
     # Ohh--need to add `totals` in there as well
 
-# remove storm IDs, etc.; exposrues averages across
+# remove storm IDs, etc.; exposures averages across
   # output is # per 10,000 years 
 
   # don't get mixed up with ~per-region calculations
+
+  # not sure if I want to set up #/decade this early...
+
+########################################33
+########################################
+
+  # testing version with impacts (by percentile/county)
+  # replace orig. version if it works
+  # had tried getting 95% CIs across all (vs adding up e.g. 2.5%s)
+    # but not sure that would be accurate
+    # b/c it's modeling discrete storms,not bulk ~random noise
+
+# filter to Rhode Island (5 counties; cleaner than e.g. arbitrary # rows):
+  # filter(str_detect(gridid, "^44")) %>%
+
+  # also adding in geometery; seems more efficient than 2 versions of each
+    # I guess see if the geometry column adds too much 'mass'; worst case
+    # could remove 
+
+
+# OK, "live" versions are 
+  # tc_exp_impact_counties_months
+  # tc_exp_impact_counties
+# And add up to get larger regions (rather than ~re-sample)
+
+impact_na <- tibble(exposures = as.integer(0),
+                    mean = as.double(0),
+                    lower = as.double(0),
+                    upper = as.double(0))
+
+tc_exp_impact_counties <- (test_bayesian_rowwise_95_cis_2k %>% 
+                             dplyr::select(-impact) %>%
+                             unnest(data) %>%
+                             dplyr::select(gridid, storm_id, id, age_65_plus,
+                                           date_time_max_wind, vmax_sust, impact_summary) %>%
+                             filter(age_65_plus >= 100) %>%
+                             mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane_force",
+                                                          vmax_sust < 32.9 ~ "sub_hurricane_force")) %>%
+                             group_by(gridid, hurricane, age_65_plus) %>%
+                             #summarise(exposures = n()) %>%
+                             add_count(name = "exposures") %>% 
+                             mutate(impact_lower = purrr::map(.x = impact_summary,
+                                                              .f = ~.x[1]),
+                                    impact_center = purrr::map(.x = impact_summary, 
+                                                               .f = ~.x[2]), 
+                                    impact_upper = purrr::map(.x = impact_summary,
+                                                              .f = ~.x[3])) %>%
+                             dplyr::select(-storm_id, -id, -date_time_max_wind,
+                                           -vmax_sust, -impact_summary) %>%
+                             unique() %>% 
+                             arrange(gridid)) %>%
+  unnest(c(impact_lower, impact_center, impact_upper)) %>%
+  group_by(gridid, age_65_plus, hurricane) %>% 
+  mutate(mean = sum(mean), lower = sum(lower), upper = sum(upper)) %>% 
+  unique() %>% 
+  nest() %>% 
+  pivot_wider(names_from = hurricane, values_from = data)  %>%
+  replace_na(list(hurricane_force = list(impact_na))) %>%
+  mutate(total_exposures = purrr::map2(.x = sub_hurricane_force,
+                                       .y = hurricane_force,
+                                       .f = ~(.x + .y))) %>% 
+  pivot_longer(cols = c(sub_hurricane_force, 
+                        hurricane_force, total_exposures),
+               names_to = "tc_category", 
+               values_to = "impact_summary") %>% 
+  unnest(impact_summary) %>%
+  left_join((us_counties_wgs84 %>%
+               dplyr::select(GEOID, NAME,
+                             state, region, geometry)),
+            by = c("gridid" = "GEOID")) 
+    # weird--runs much faster than I expected 
+
+
+tc_exp_impact_regions <- tc_exp_impact_counties %>%
+  group_by(region, tc_category) %>%
+  mutate(exposures = sum(exposures),
+  age_65_plus = sum(age_65_plus),
+  mean = sum(mean),
+  lower = sum(lower),
+  upper = sum(upper),
+  geometry = st_union(geometry)
+  ) %>%
+  dplyr::select(-gridid, -state, -NAME) %>%
+  unique()
+
+
+tc_exp_impact_states <- tc_exp_impact_counties %>%
+  group_by(state, tc_category) %>%
+  mutate(exposures = sum(exposures),
+         age_65_plus = sum(age_65_plus),
+         mean = sum(mean),
+         lower = sum(lower),
+         upper = sum(upper),
+         geometry = st_union(geometry)
+  ) %>%
+  dplyr::select(-gridid, -NAME) %>%
+  unique()
+  
+  
+
+# monthly version of combined object
+tc_exp_impact_counties_months <- (test_bayesian_rowwise_95_cis_2k %>% 
+                                    dplyr::select(-impact) %>%
+                                    unnest(data) %>%
+                                    dplyr::select(gridid, storm_id, id, age_65_plus,
+                                                  date_time_max_wind, vmax_sust, impact_summary) %>%
+                                    filter(age_65_plus >= 100) %>%
+                                    mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane_force",
+                                                                 vmax_sust < 32.9 ~ "sub_hurricane_force"),
+                                           month = lubridate::month(date_time_max_wind)) %>%
+                                    group_by(gridid, hurricane, age_65_plus, month) %>%
+                                    #summarise(exposures = n()) %>%
+                                    add_count(name = "exposures") %>% 
+                                    mutate(impact_lower = purrr::map(.x = impact_summary,
+                                                                     .f = ~.x[1]),
+                                           impact_center = purrr::map(.x = impact_summary, 
+                                                                      .f = ~.x[2]), 
+                                           impact_upper = purrr::map(.x = impact_summary,
+                                                                     .f = ~.x[3])) %>%
+                                    dplyr::select(-storm_id, -id, -date_time_max_wind,
+                                                  -vmax_sust, -impact_summary) %>%
+                                    unique() %>% 
+                                    arrange(gridid)) %>%
+  unnest(c(impact_lower, impact_center, impact_upper)) %>%
+  group_by(gridid, age_65_plus, hurricane, month) %>% 
+  mutate(mean = sum(mean), lower = sum(lower), upper = sum(upper)) %>% 
+  unique() %>% 
+  nest() %>% 
+  pivot_wider(names_from = hurricane, values_from = data)  %>%
+  replace_na(list(hurricane_force = list(impact_na))) %>%
+  mutate(total_exposures = purrr::map2(.x = sub_hurricane_force,
+                                       .y = hurricane_force,
+                                       .f = ~(.x + .y))) %>% 
+  pivot_longer(cols = c(sub_hurricane_force, 
+                        hurricane_force, total_exposures),
+               names_to = "tc_category", 
+               values_to = "impact_summary") %>% 
+  unnest(impact_summary) %>%
+  left_join((us_counties_wgs84 %>%
+               dplyr::select(GEOID, NAME,
+                             state, region, geometry)),
+            by = c("gridid" = "GEOID")) 
+
+#
+
+tc_exp_impact_months_regions <- tc_exp_impact_counties_months %>%
+  group_by(region, tc_category, month) %>%
+  mutate(exposures = sum(exposures),
+         age_65_plus = sum(age_65_plus),
+         mean = sum(mean),
+         lower = sum(lower),
+         upper = sum(upper),
+         geometry = st_union(geometry)
+  ) %>%
+  dplyr::select(-gridid, -state, -NAME) %>%
+  unique()
+
+
+tc_exp_impact_months_states <- tc_exp_impact_counties_months %>%
+  group_by(state, tc_category) %>%
+  mutate(exposures = sum(exposures),
+         age_65_plus = sum(age_65_plus),
+         mean = sum(mean),
+         lower = sum(lower),
+         upper = sum(upper),
+         geometry = st_union(geometry)
+  ) %>%
+  dplyr::select(-gridid, -NAME) %>%
+  unique()
+
+    # historical versions (for e.g. supplemental figs)
+
+
+tc_exp_impact_counties_hist <- (test_bayesian_rowwise_95_cis_hist %>% 
+                             dplyr::select(-impact) %>%
+                             unnest(data) %>%
+                             dplyr::select(gridid, storm_id, id, age_65_plus,
+                                           date_time_max_wind, vmax_sust, impact_summary) %>%
+                             filter(age_65_plus >= 100) %>%
+                             mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane_force",
+                                                          vmax_sust < 32.9 ~ "sub_hurricane_force")) %>%
+                             group_by(gridid, hurricane, age_65_plus) %>%
+                             #summarise(exposures = n()) %>%
+                             add_count(name = "exposures") %>% 
+                             mutate(impact_lower = purrr::map(.x = impact_summary,
+                                                              .f = ~.x[1]),
+                                    impact_center = purrr::map(.x = impact_summary, 
+                                                               .f = ~.x[2]), 
+                                    impact_upper = purrr::map(.x = impact_summary,
+                                                              .f = ~.x[3])) %>%
+                             dplyr::select(-storm_id, -id, -date_time_max_wind,
+                                           -vmax_sust, -impact_summary) %>%
+                             unique() %>% 
+                             arrange(gridid)) %>%
+  unnest(c(impact_lower, impact_center, impact_upper)) %>%
+  group_by(gridid, age_65_plus, hurricane) %>% 
+  mutate(mean = sum(mean), lower = sum(lower), upper = sum(upper)) %>% 
+  unique() %>% 
+  nest() %>% 
+  pivot_wider(names_from = hurricane, values_from = data)  %>%
+  replace_na(list(hurricane_force = list(impact_na))) %>%
+  mutate(total_exposures = purrr::map2(.x = sub_hurricane_force,
+                                       .y = hurricane_force,
+                                       .f = ~(.x + .y))) %>% 
+  pivot_longer(cols = c(sub_hurricane_force, 
+                        hurricane_force, total_exposures),
+               names_to = "tc_category", 
+               values_to = "impact_summary") %>% 
+  unnest(impact_summary) %>%
+  left_join((us_counties_wgs84 %>%
+               dplyr::select(GEOID, NAME,
+                             state, region, geometry)),
+            by = c("gridid" = "GEOID")) 
+# weird--runs much faster than I expected 
+
+
+
+
+# monthly version of combined object
+tc_exp_impact_counties_months_hist <- (test_bayesian_rowwise_95_cis_hist %>% 
+                                    dplyr::select(-impact) %>%
+                                    unnest(data) %>%
+                                    dplyr::select(gridid, storm_id, id, age_65_plus,
+                                                  date_time_max_wind, vmax_sust, impact_summary) %>%
+                                    filter(age_65_plus >= 100) %>%
+                                    mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane_force",
+                                                                 vmax_sust < 32.9 ~ "sub_hurricane_force"),
+                                           month = lubridate::month(date_time_max_wind)) %>%
+                                    group_by(gridid, hurricane, age_65_plus, month) %>%
+                                    #summarise(exposures = n()) %>%
+                                    add_count(name = "exposures") %>% 
+                                    mutate(impact_lower = purrr::map(.x = impact_summary,
+                                                                     .f = ~.x[1]),
+                                           impact_center = purrr::map(.x = impact_summary, 
+                                                                      .f = ~.x[2]), 
+                                           impact_upper = purrr::map(.x = impact_summary,
+                                                                     .f = ~.x[3])) %>%
+                                    dplyr::select(-storm_id, -id, -date_time_max_wind,
+                                                  -vmax_sust, -impact_summary) %>%
+                                    unique() %>% 
+                                    arrange(gridid)) %>%
+  unnest(c(impact_lower, impact_center, impact_upper)) %>%
+  group_by(gridid, age_65_plus, hurricane, month) %>% 
+  mutate(mean = sum(mean), lower = sum(lower), upper = sum(upper)) %>% 
+  unique() %>% 
+  nest() %>% 
+  pivot_wider(names_from = hurricane, values_from = data)  %>%
+  replace_na(list(hurricane_force = list(impact_na))) %>%
+  mutate(total_exposures = purrr::map2(.x = sub_hurricane_force,
+                                       .y = hurricane_force,
+                                       .f = ~(.x + .y))) %>% 
+  pivot_longer(cols = c(sub_hurricane_force, 
+                        hurricane_force, total_exposures),
+               names_to = "tc_category", 
+               values_to = "impact_summary") %>% 
+  unnest(impact_summary) %>%
+  left_join((us_counties_wgs84 %>%
+               dplyr::select(GEOID, NAME,
+                             state, region, geometry)),
+            by = c("gridid" = "GEOID")) 
+
+##
+
+tc_exp_impact_months_hist_regions <- tc_exp_impact_counties_months_hist %>%
+  group_by(region, tc_category, month) %>%
+  mutate(exposures = sum(exposures),
+         age_65_plus = sum(age_65_plus),
+         mean = sum(mean),
+         lower = sum(lower),
+         upper = sum(upper),
+         geometry = st_union(geometry)
+  ) %>%
+  dplyr::select(-gridid, -state, -NAME) %>%
+  unique()
+
+
+tc_exp_impact_months_hist_states <- tc_exp_impact_counties_months_hist %>%
+  group_by(state, tc_category, month) %>%
+  mutate(exposures = sum(exposures),
+         age_65_plus = sum(age_65_plus),
+         mean = sum(mean),
+         lower = sum(lower),
+         upper = sum(upper),
+         geometry = st_union(geometry)
+  ) %>%
+  dplyr::select(-gridid, -NAME) %>%
+  unique()
+
+##### 
+save(tc_exp_impact_counties, file = "tc_exp_impact_counties.rda")
+save(tc_exp_impact_regions, file = "tc_exp_impact_regions.rda")
+save(tc_exp_impact_states, file = "tc_exp_impact_states.rda")
+save(tc_exp_impact_months_regions, file = "tc_exp_impact_months_regions.rda")
+save(tc_exp_impact_months_states, file = "tc_exp_impact_months_states.rda")
+save(tc_exp_impact_counties_hist, file = "tc_exp_impact_counties_hist.rda")
+
+save(tc_exp_impact_months_hist_regions, file = "tc_exp_impact_months_hist_regions.rda")
+save(tc_exp_impact_months_hist_states, file = "tc_exp_impact_months_hist_states.rda")
+
+load("us_states.rda")
+########################3
+
+
+# aggregating geometry for map backgrounds
+
+
+us_states <- get_acs(
+  geography = "state",
+  variables = "B06012_001",
+  year = 2020,
+  geometry = TRUE
+) %>% 
+  dplyr::select(GEOID, NAME, geometry)
+
+#tidycensus::state_laea #object included in `tidycensus`
+# states (borders)
+
+study_counties <- tc_exp_impact_counties %>%
+  ungroup() %>%
+  dplyr::select(state, region, NAME, geometry) %>%
+  unique() %>%
+  st_as_sf() %>%
+  st_transform(crs = "WGS84")  
+
+study_states <- tc_exp_impact_counties %>%
+  ungroup() %>%
+  dplyr::select(state, region) %>% 
+  unique() %>%
+  left_join(us_states, by = c('state' = 'NAME'))  %>%
+  st_as_sf() %>%
+  st_transform(crs = "WGS84")  
+
+study_regions <- study_states %>%
+  group_by(region) %>%
+  mutate(geometry = st_union(geometry)) %>%
+  dplyr::select(-state, -GEOID) %>%
+  unique()
+
+################################33
+
+# Oh, I don't think regions, etc., should change w/ historical vs
+  # synth. data
+
+
+
+##############
+
+#   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #
+          # Figures & Summary values #
+#   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #
+
+tc_exp_impact_regions_months_boxplots <- tc_exp_impact_months_regions %>% 
+  ggplot(aes(x = month, y = mean/200, ymin = lower/200,
+             ymax = upper/200, color = tc_category)) + 
+  geom_errorbar(position = position_dodge(width = 0.6)) +
+  geom_point(position = position_dodge(width = 0.6), 
+             size = 0.5, shape = 4)+ 
+  geom_point(aes(size = exposures/200), 
+             alpha = 0.3,
+             position = position_dodge(width = 0.6)) +
+  facet_wrap(. ~ region) +
+  theme_classic() + 
+  geom_hline(yintercept = 0) +
+  labs(x = "Month",
+       y = "Attributable Excess Deaths per Decade",
+       size = "Storms per Century",
+       color = "Hurricane Status\n(>=32.9 m/s Exposures)", 
+       title = "Simulated Tropical Cyclone Attributable Deaths by Region per Decade")
+  
+
+tc_exp_impact_regions_months_boxplots_hist <- tc_exp_impact_months_hist_regions %>% 
+  ggplot(aes(x = month, y = mean/3, ymin = lower/3,
+             ymax = upper/3, color = tc_category)) + 
+  geom_errorbar(position = position_dodge(width = 0.6)) +
+  geom_point(position = position_dodge(width = 0.6), 
+             size = 0.5, shape = 4)+ 
+  geom_point(aes(size = exposures/3), 
+             alpha = 0.3,
+             position = position_dodge(width = 0.6)) +
+  facet_wrap(. ~ region) +
+  theme_classic() + 
+  geom_hline(yintercept = 0) +
+  labs(x = "Month",
+       y = "Attributable Excess Deaths per Decade",
+       size = "Storms per Century",
+       color = "Hurricane Status\n(>=32.9 m/s Exposures)", 
+       title = "Simulated Tropical Cyclone Attributable Deaths by Region per Decade")
+
+
+
+# Maps
+
+   # monthly -- actually might check out w/ annual
+exposures_map_months <- ggplot() + 
+  
+  geom_sf(aes(geometry = geometry,
+              color = region, alpha = 0.2),
+          fill = NA,
+          alpha = 0.2,
+          linewidth = 4,
+          data = study_regions) +
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5,
+          fill = 'white', 
+          color = 'black',
+          data = study_states) +
+  
+  geom_sf(aes(geometry = geometry,
+              fill = exposures/200),
+          linewidth = 0.5, color = NA, 
+          data = tc_exp_impact_counties_months) +
+  
+  
+  geom_sf(aes(geometry = geometry,
+              color = region),
+          fill = NA,
+          linewidth = 0.5,
+          data = study_regions)+ 
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5, 
+          color = 'black',
+          fill = NA, 
+          data = study_states) +
+  facet_wrap(. ~ tc_category + month, ncol = 6) +
+  
+  theme_void() +
+  scale_fill_viridis_c(option = "turbo") +
+  
+  scale_color_viridis_d(option = "plasma") +
+  labs(color = "NCEI Region",
+       fill = "Cyclone Days per Decade")
+
+
+exposures_map <- ggplot() + 
+  
+  geom_sf(aes(geometry = geometry,
+              color = region, alpha = 0.2),
+          fill = NA,
+          alpha = 0.2,
+          linewidth = 4,
+          data = study_regions) +
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5,
+          fill = 'white', 
+          color = 'black',
+          data = study_states) +
+  
+  geom_sf(aes(geometry = geometry,
+              fill = exposures/200),
+          linewidth = 0.5, color = NA, 
+          data = tc_exp_impact_counties) +
+  
+  
+  geom_sf(aes(geometry = geometry,
+              color = region),
+          fill = NA,
+          linewidth = 0.5,
+          data = study_regions)+ 
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5, 
+          color = 'black',
+          fill = NA, 
+          data = study_states) +
+  facet_wrap(. ~ tc_category, ncol = 3) +
+  
+  theme_void() +
+  scale_fill_viridis_c(option = "turbo") +
+  
+  scale_color_viridis_d(option = "plasma") +
+  labs(color = "NCEI Region",
+       fill = "Cyclone Days per Decade")
+
+
+person_exposures_map <- ggplot() + 
+  
+  geom_sf(aes(geometry = geometry,
+              color = region, alpha = 0.2),
+          fill = NA,
+          alpha = 0.2,
+          linewidth = 4,
+          data = study_regions) +
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5,
+          fill = 'white', 
+          color = 'black',
+          data = study_states) +
+  
+  geom_sf(aes(geometry = geometry,
+              fill = (age_65_plus * exposures)/200),
+          linewidth = 0.5, color = NA, 
+          data = tc_exp_impact_counties) +
+  
+  
+  geom_sf(aes(geometry = geometry,
+              color = region),
+          fill = NA,
+          linewidth = 0.5,
+          data = study_regions)+ 
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5, 
+          color = 'black',
+          fill = NA, 
+          data = study_states) +
+  facet_wrap(. ~ tc_category, ncol = 3) +
+  
+  theme_void() +
+  scale_fill_viridis_c(option = "turbo", trans = "log") +
+  
+  scale_color_viridis_d(option = "plasma") +
+  labs(color = "NCEI Region",
+       fill = "Person-Exposures per Decade")
+
+
+excess_mort_map <- ggplot() + 
+  
+  geom_sf(aes(geometry = geometry,
+              color = region, alpha = 0.2),
+          fill = NA,
+          alpha = 0.2,
+          linewidth = 4,
+          data = study_regions) +
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5,
+          fill = 'white', 
+          color = 'black',
+          data = study_states) +
+  
+  geom_sf(aes(geometry = geometry,
+              fill = mean/200),
+          linewidth = 0.5, color = NA, 
+          data = tc_exp_impact_counties) +
+  
+  
+  geom_sf(aes(geometry = geometry,
+              color = region),
+          fill = NA,
+          linewidth = 0.5,
+          data = study_regions)+ 
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5, 
+          color = 'black',
+          fill = NA, 
+          data = study_states) +
+  facet_wrap(. ~ tc_category, ncol = 3) +
+  
+  theme_void() +
+  scale_fill_viridis_c(option = "turbo") +
+  
+  scale_color_viridis_d(option = "plasma") +
+  labs(color = "NCEI Region",
+       fill = "Median Attributable Mortality per Decade")
+
+#   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #
+#   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #
+
+
+
+
+
+
+
+
+
+
+
+
+# trying version with aggregating estimates across counties for CIs
+  # OK, conceptually, that would be summarizing the ~range of 
+  # impacts possible for a given storm/category, vs total impact
+  # so I think adding storm estimates together makes more sense
+    # for the intended metric
+  # or report as ~impacts per-storm 
+tc_exp_impact_agg_counties_months <- (test_bayesian_rowwise_95_cis %>% 
+                                    dplyr::select(-impact_summary) %>%
+                                    unnest(data) %>%
+                                    dplyr::select(gridid, storm_id, id, age_65_plus,
+                                                  date_time_max_wind, vmax_sust, impact) %>%
+                                    filter(age_65_plus >= 100) %>%
+                                    mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane_force",
+                                                                 vmax_sust < 32.9 ~ "sub_hurricane_force"),
+                                           month = lubridate::month(date_time_max_wind)) %>%
+                                    group_by(gridid, age_65_plus, month) %>%
+                                      mutate(impact_total = purrr::map(.x = impact, 
+                                                                             .f = ~rbind(.x))) %>%
+                                      group_by(gridid, hurricane, age_65_plus, month) %>%
+                                    #summarise(exposures = n()) %>%
+                                    add_count(name = "exposures") %>% 
+                                    mutate(impact_lower = purrr::map(.x = impact_summary,
+                                                                     .f = ~.x[1]),
+                                           impact_center = purrr::map(.x = impact_summary, 
+                                                                      .f = ~.x[2]), 
+                                           impact_upper = purrr::map(.x = impact_summary,
+                                                                     .f = ~.x[3])) %>%
+                                    dplyr::select(-storm_id, -id, -date_time_max_wind,
+                                                  -vmax_sust, -impact_summary) %>%
+                                    unique() %>% 
+                                    arrange(gridid)) %>%
+  unnest(c(impact_lower, impact_center, impact_upper)) %>%
+  group_by(gridid, age_65_plus, hurricane, month) %>% 
+  mutate(mean = sum(mean), lower = sum(lower), upper = sum(upper)) %>% 
+  unique() %>% 
+  nest() %>% 
+  pivot_wider(names_from = hurricane, values_from = data)  %>%
+  replace_na(list(hurricane_force = list(impact_na))) %>%
+  mutate(total_exposures = purrr::map2(.x = sub_hurricane_force,
+                                       .y = hurricane_force,
+                                       .f = ~(.x + .y))) %>% 
+  pivot_longer(cols = c(sub_hurricane_force, 
+                        hurricane_force, total_exposures),
+               names_to = "tc_category", 
+               values_to = "impact_summary") %>% 
+  unnest(impact_summary) %>%
+  left_join((us_counties_wgs84 %>%
+               dplyr::select(GEOID, NAME,
+                             state, region, geometry)),
+            by = c("gridid" = "GEOID"))
+
+  #could aggregate previous version from this
+
+ #OK, and now should be easier to aggregate for plotting
+
+  # OK, I'm seeing 140019243 as the counties' total population
+  # 140,019,243; for reference,~330,000,000  in US; *way* too high
+    # OK, I hadn't un-grouped by month early enough; now getting 27,469,952
+
+  # oh, but since I *do* want to keep months, etc., in there,
+    # I guess could nest everything but gridid and region, 
+      # then add up, and unnest
+
+tc_exp_impact_regions_months  <- tc_exp_impact_counties_months %>%
+  ungroup() %>% 
+  group_by(gridid, region, 
+           age_65_plus) %>% 
+  nest() %>% 
+  group_by(region) %>% 
+  mutate(age_65_plus_region = sum(age_65_plus)) %>%
+  unnest(cols = c(data)) %>% 
+  ungroup() %>% 
+  dplyr::select(region, month, 
+                tc_category, 
+                age_65_plus_region, 
+                exposures, mean, 
+                lower, upper) %>% 
+  unique() %>% 
+  group_by(region, month,
+           tc_category) %>%
+  mutate(exposures = sum(exposures),
+         mean = sum(mean), 
+         lower = sum(lower),
+         upper = sum(upper),
+         age_65_plus_region = mean(age_65_plus_region)) %>%
+  unique() 
+
+
+# adapting a plot: 
+tc_exp_impact_regions_months %>% 
+  ggplot(aes(x = month, y = mean/200, ymin = lower/200,
+             ymax = upper/200, color = tc_category)) + 
+  geom_errorbar(position = position_dodge(width = 0.6)) +
+  geom_point(position = position_dodge(width = 0.6))+ 
+  geom_point(aes(size = exposures/200), 
+             alpha = 0.3,
+             position = position_dodge(width = 0.6)) +
+  facet_wrap(. ~ region) +
+  theme_classic() + 
+  geom_hline(yintercept = 0) +
+  labs(x = "Month",
+       y = "Attributable Excess Deaths per Decade",
+       size = "Storms per Century",
+       color = "Hurricane Status\n(>=32.9 m/s Exposures)", 
+       title = "Simulated Tropical Cyclone Attributable Deaths by Region per Century") %>%
+
+
+#################################################33
+##################################################3
+## Trying aggregating by a larger region while keeping counties constant
+  # oh, actually wouldn't need to change
+  # just instead of un-nessting and adding the 95% CIs, 
+    # calculate new ones from pooled impacts
+
+  # OK, one other difference: current bifurcation between hurricane,
+    # sub-hurricane, effects doesn't support the same workflow
+  # oh, could do 2 'group_by_ operations with different names and then 
+  # pivot_longer?
+    # so would need to pivot_wider for over/under hurricane first, then 
+    # pivot longer with the 3 columns and decide how to handle NULL results
+
+
+impact_na <- tibble(exposures = as.integer(0),
+                    mean = as.double(0),
+                    lower = as.double(0),
+                    upper = as.double(0))
+
+tc_exp_impact_counties <- (test_bayesian_rowwise_95_cis %>% 
+                             dplyr::select(-impact_summary) %>%
+                             unnest(data) %>%
+                             dplyr::select(gridid, storm_id, id, age_65_plus,
+                                           date_time_max_wind, vmax_sust, impact) %>%
+                             filter(age_65_plus >= 100) %>%
+                             mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane_force",
+                                                          vmax_sust < 32.9 ~ "sub_hurricane_force")) %>%
+                             group_by(gridid, hurricane, age_65_plus) %>%
+                             #summarise(exposures = n()) %>%
+                             add_count(name = "exposures") %>% 
+                             mutate(impact_lower = purrr::map(.x = impact,
+                                                              .f = ~.x[1]),
+                                    impact_center = purrr::map(.x = impact_summary, 
+                                                               .f = ~.x[2]), 
+                                    impact_upper = purrr::map(.x = impact_summary,
+                                                              .f = ~.x[3])) %>%
+                             dplyr::select(-storm_id, -id, -date_time_max_wind,
+                                           -vmax_sust, -impact_summary) %>%
+                             unique() %>% 
+                             arrange(gridid)) %>%
+  unnest(c(impact_lower, impact_center, impact_upper)) %>%
+  group_by(gridid, age_65_plus, hurricane) %>% 
+  mutate(mean = sum(mean), lower = sum(lower), upper = sum(upper)) %>% 
+  unique() %>% 
+  nest() %>% 
+  pivot_wider(names_from = hurricane, values_from = data)  %>%
+  replace_na(list(hurricane_force = list(impact_na))) %>%
+  mutate(total_exposures = purrr::map2(.x = sub_hurricane_force,
+                                       .y = hurricane_force,
+                                       .f = ~(.x + .y))) %>% 
+  pivot_longer(cols = c(sub_hurricane_force, 
+                        hurricane_force, total_exposures),
+               names_to = "tc_category", 
+               values_to = "impact_summary") %>% 
+  unnest(impact_summary) %>%
+  left_join((us_counties_wgs84 %>%
+               dplyr::select(GEOID, NAME,
+                             state, region, geometry)),
+            by = c("gridid" = "GEOID"))
+
+
+########################################33
+###########################################
 
 exp_person_summary <- test_bayesian_rowwise_95_cis %>%
   dplyr::select(-impact, -impact_summary) %>%
@@ -63,38 +837,7 @@ exp_person_summary <- test_bayesian_rowwise_95_cis %>%
   group_by(gridid, hurricane, age_65_plus) %>%
   #summarise(exposures = n()) %>%
   add_count(name = "exposures") %>%
-  dplyr::select(-storm_id, -id, -date_time_max_wind, -vmax_sust) %>%
-  unique() %>%
-  pivot_wider(names_from = hurricane,
-              values_from = exposures) %>%
-  mutate("total" = sum(`hurricane force`, 
-                                     `sub-hurricane force`, 
-                       na.rm = TRUE)) %>%
-  pivot_longer(cols = c(`hurricane force`, 
-                          `sub-hurricane force`,
-                        `total`),
-               names_to = "tc_cat",
-               values_to = "exposures") %>%
-  mutate(person_exposures = exposures * 
-           age_65_plus)
-
-  # testing version with impacts (by percentile/county)
-  # replace orig. version if it works
-  # had tried getting 95% CIs across all (vs adding up e.g. 2.5%s)
-    # but not sure that would be accurate
-    # b/c it's modeling discrete storms,not bulk ~random noise
-
-exp_person_summary_impact <- test_bayesian_rowwise_95_cis %>%
-  dplyr::select(-impact) %>%
-  unnest(data) %>%
-  dplyr::select(gridid, storm_id, id, age_65_plus,
-                date_time_max_wind, vmax_sust, impact_summary) %>%
-  filter(age_65_plus >= 100) %>%
-  mutate(hurricane = case_when(vmax_sust >= 32.9 ~ "hurricane force",
-                               vmax_sust < 32.9 ~ "sub-hurricane force")) %>%
-  group_by(gridid, hurricane, age_65_plus) %>%
-  #summarise(exposures = n()) %>%
-  add_count(name = "exposures") %>%
+  mutate(exposures = exposures / n_decades) %>%
   dplyr::select(-storm_id, -id, -date_time_max_wind, -vmax_sust) %>%
   unique() %>%
   pivot_wider(names_from = hurricane,
@@ -109,6 +852,7 @@ exp_person_summary_impact <- test_bayesian_rowwise_95_cis %>%
                values_to = "exposures") %>%
   mutate(person_exposures = exposures * 
            age_65_plus)
+
 
 # monthly version
 
@@ -129,6 +873,7 @@ month = factor(month,
                                  month %in% c(10,11) ~ "Late")) %>%
   group_by(gridid, hurricane, month) %>%
   add_count(name = "exposures") %>%
+  mutate(exposures = exposures/n_decades) %>%
   dplyr::select(-storm_id, -id, -date_time_max_wind, -vmax_sust) %>%
   unique() %>%
   pivot_wider(names_from = hurricane,
@@ -330,7 +1075,7 @@ save(exp_person_summary, file = "exp_person_summary.rda")
     # this is basically an ID column, so shouldn't impact
     # data integrity, but still something to note
 
-demo_storm_track <- storm_10k_obs_na_proc_hurricane %>%
+demo_storm_track <- storm_2k_all_obs_na_proc_ggw %>%
   filter(storm_id == "0-0903-8-4") %>%
   #mutate(longitude = longitude - 360) %>%
   st_as_sf(coords = c('longitude', 'latitude'), 
@@ -454,23 +1199,10 @@ combined_pop_region_main <-  ggplot() +
           color = 'black',
           data = study_regions_states) +
   
-  #geom_sf(aes(geometry = geometry),
-  #        color = "grey40", 
-  #        fill = 'white',
-  #        data = study_regions_states_counties) +
-  
   geom_sf(aes(geometry = geometry,
               fill = age_65_plus),
           linewidth = 0.5, color = NA, 
           data = study_regions) +
-  
-  
-  
-  #geom_sf(aes(geometry = geometry,
-  #            color = region),
-  #        fill = NA,
-  #        linewidth = 0.5,
-  #        data = study_regions_ncei) +
   
   geom_sf(aes(geometry = geometry,
               color = region),
@@ -483,20 +1215,94 @@ combined_pop_region_main <-  ggplot() +
           fill = NA, 
           data = study_regions_states) +
   
-  #geom_sf_label(position = "jitter",
-  #              size = 0.5,label.size = NA,
-  #              aes(label = NAME), 
-  #             colour = "black", 
-  #             data=(st_centroid(st_as_sf(study_regions %>% 
-  #                                          filter(most_impacted == TRUE))))) +
-  
   theme_void() +
   scale_fill_viridis_c(option = "turbo", trans = "log") +
-  #scale_color_manual(values = c("#b9c85eff", "#83a4a3ff",
-  #                              "#efdf8bff", "#dbb35bff")) +
   scale_color_viridis_d(option = "plasma") +
   labs(color = "NCEI Region",
        fill = "County Population (65+);\n (Log Scale)")
+
+   
+# exposures -- should be decades
+   
+combined_exp_region_main <-  ggplot() + 
+     
+     geom_sf(aes(geometry = geometry,
+                 color = region, alpha = 0.2),
+             fill = NA,
+             alpha = 0.2,
+             linewidth = 4,
+             data = study_regions_ncei) +
+     
+     geom_sf(aes(geometry = geometry),
+             linewidth = 0.5,
+             fill = 'white', 
+             color = 'black',
+             data = study_regions_states) +
+     
+     geom_sf(aes(geometry = geometry,
+                 fill = exposures),
+             linewidth = 0.5, color = NA, 
+             data = study_regions) +
+     
+     geom_sf(aes(geometry = geometry,
+                 color = region),
+             fill = NA,
+             linewidth = 0.5,
+             data = study_regions_ncei)+ 
+     geom_sf(aes(geometry = geometry),
+             linewidth = 0.5, 
+             color = 'black',
+             fill = NA, 
+             data = study_regions_states) +
+     
+     theme_void() +
+     scale_fill_viridis_c(option = "turbo") +
+     scale_color_viridis_d(option = "plasma") +
+     labs(color = "NCEI Region",
+          fill = "Exposures per Decade (2000-year simulation)") + 
+  facet_wrap(. ~ tc_cat, ncol = 2)
+   
+# person-exp
+
+
+combined_exp_region_main <-  ggplot() + 
+  
+  geom_sf(aes(geometry = geometry,
+              color = region, alpha = 0.2),
+          fill = NA,
+          alpha = 0.2,
+          linewidth = 4,
+          data = study_regions_ncei) +
+  
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5,
+          fill = 'white', 
+          color = 'black',
+          data = study_regions_states) +
+  
+  geom_sf(aes(geometry = geometry,
+              fill = person_exposures),
+          linewidth = 0.5, color = NA, 
+          data = study_regions) +
+  
+  geom_sf(aes(geometry = geometry,
+              color = region),
+          fill = NA,
+          linewidth = 0.5,
+          data = study_regions_ncei)+ 
+  geom_sf(aes(geometry = geometry),
+          linewidth = 0.5, 
+          color = 'black',
+          fill = NA, 
+          data = study_regions_states) +
+  
+  theme_void() +
+  scale_fill_viridis_c(option = "turbo", trans = 'log') +
+  scale_color_viridis_d(option = "plasma") +
+  labs(color = "NCEI Region",
+       fill = "Person-Exposures per Decade (2000-year simulation)") + 
+  facet_wrap(. ~ tc_cat, ncol = 2)
+
 
 # 'key' to inset
 
@@ -927,21 +1733,19 @@ impact_summary_months_state <- test_bayesian_rowwise_95_cis %>%
 impact_summary_months_region <- test_bayesian_rowwise_95_cis %>%
   dplyr::select(-impact_summary) %>%
   unnest(data) %>%
+  mutate(month = lubridate::month(date_time_max_wind)) %>%
+  mutate(month = factor(month,
+                 levels = c(6,7,8,9,10,11))
+  ) %>%
   dplyr::select(gridid, storm_id, id, age_65_plus,
-                date_time_max_wind, vmax_sust, impact) %>%
+                month, vmax_sust, impact) %>%
   left_join((study_regions %>%  ungroup() %>%
                dplyr::select(gridid, state, region,
                              exposures, person_exposures)),
             by = "gridid") %>%
   filter(age_65_plus >= 100) %>%
   mutate(hurricane = vmax_sust >= 32.9) %>%
-  mutate(month = as.numeric(
-    gsub((str_extract(storm_id, "-\\d{1,2}-")),
-         pattern = "-", 
-         replacement = "")), 
-    month = factor(month,
-                   levels = c(6,7,8,9,10,11))
-  ) %>%
+
   group_by(gridid, hurricane, month, region) %>%
   add_count() %>%
   mutate(impact_summary = 
@@ -1023,7 +1827,7 @@ impact_summary_months %>%
   geom_hline(yintercept = 0) +
   labs(x = "Month",
        y = "Attributable Excess Deaths (Totals)",
-       size = "Storms per Century",
+       size = "Storms per Decade",
        color = "Hurricane Status\n(>=32.9 m/s Exposures)", 
        title = "Simulated Tropical Cyclone Attributable Deaths by State per Century")
 
@@ -1043,6 +1847,7 @@ impact_summary_months_region %>%
                 region) %>%
   group_by(gridid, month, hurricane) %>%
   add_count(name = "exposures") %>%
+  mutate(exposures = exposures/n_decades) %>%
   unnest(impact_summary) %>% 
   group_by(region, hurricane, month, percentile) %>%
   add_count(name = "exposures_region") %>% 
@@ -1185,6 +1990,21 @@ ggplot() +
   
 # not currently using; was running into issues w/ explicit geography operations
 
+## Comparing TC windspeeds
+
+ggplot() +
+  geom_histogram(data = storm_hist_proc_hurricane,
+                 aes(x = wind,
+                     y = after_stat(count / sum(count))),
+                 fill = 'black',
+                 alpha = 0.5) +
+  geom_histogram(data = storm_2k_obs_na_proc, 
+                 aes(x = wind,
+                     y = after_stat(count / sum(count))),
+                 fill = 'cyan',
+                 alpha = 0.5) +
+  theme_minimal()
+ 
 
 
 ## Oh, have been keeping this too much in-console, but here are some plots by region
@@ -2049,3 +2869,50 @@ test_bayesian_rowwise_hist_95_cis %>%
 
 
 # ideally track down IBTrACS or something similar 
+
+
+
+#   #   #   #   #   #   #   #   #   3   #   #   #
+
+# trying to compare tracks between historical and 2k data
+
+
+
+  
+ggplot() +
+  geom_sf(aes(geometry = geometry),
+          fill = NA,
+          color = 'black', 
+          data = tc_exp_impact_counties) + 
+  geom_sf(aes(
+    geometry = geometry,
+    color = wind,
+    group = storm_id),
+    data = storm_2k_obs_na_proc[1:8000,] %>% 
+      mutate(longitude = longitude) %>%
+      st_as_sf(coords = c("longitude",
+                          "latitude"),
+               crs = st_crs(us_counties_wgs84)) ) +
+  geom_sf() +
+  theme_void() + 
+  scale_color_viridis_c()
+
+
+ggplot() +
+  geom_sf(aes(geometry = geometry),
+          fill = NA,
+          color = 'black', 
+          data = tc_exp_impact_counties) + 
+  geom_sf(aes(
+    geometry = geometry,
+    color = wind,
+    group = storm_id),
+    data = storm_hist_proc_hurricane %>% 
+      mutate(longitude = longitude) %>%
+      st_as_sf(coords = c("longitude",
+                          "latitude"),
+               crs = st_crs(us_counties_wgs84)) ) +
+  geom_sf() +
+  theme_void() + 
+  scale_color_viridis_c()
+

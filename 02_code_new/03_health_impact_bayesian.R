@@ -26,10 +26,138 @@ get_95_ci <- function(data_in){
   # to generate summaries as part of the process
 
 
-load(file = "storm_2k_all_obs_na_proc_split_ggw.rda")
+load(file = "storm_2k_all_obs_na_proc_ggw.rda")
+load(file = "01_data/county_acs_vars_bayesian.rda")
 
+load(file = "storm_hist_proc_hurricane_ggw.rda")
 #################################################################33
   # !: Want to make sure it follows same filtering criteria
+test_bayesian_data_in_storm <- storm_2k_all_obs_na_proc_ggw %>%
+  #rownames_to_column("storm_id") %>%
+  #mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
+  filter(!is.na(date_time_max_wind))  %>%
+  left_join(county_acs_vars_bayesian, 
+            by = c("gridid" = "GEOID")) %>%
+  mutate(exposure = replace_na(exposure, 1)) %>%
+  filter(!is.na(median_house_value))
+# the removed counties are Kenedy and Loving again (I guess rejoined w/ geography?)
+# only median house value appears to be missing, though; wonder if e.g. interpolating would be a good alternative?
+# plus Bedford City County, VA, which was folded into a larger county in 2015
+
+
+#Sys.time()
+#test_bayesian <- predict(modobj, newdata = (test_bayesian_data_in) )
+# OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
+# ohh, still NAs for things like median income, etc.; I remember this is a concern
+#Sys.time()
+
+# Well, on the bright side, runs pretty much instantaneously with 100 rows;
+# output is 47000 numbers; I guess 470 per row? seems like an odd 'default' number
+
+
+#test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data_in_storm[13,]))
+
+# 1000 ~rows (trying to remember how to handle--do you do summary statistics?)
+# so rowwise application might make sense
+
+# OK, this could work:
+
+
+
+test_bayesian_rowwise_storm <- test_bayesian_data_in_storm %>%
+  filter(vmax_sust >= 17.5) %>% # too extreme?
+  group_by(gridid, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
+
+# no--everywhere from 1-2 to hundreds of counties:
+test_bayesian_rowwise_storm %>%
+  ungroup() %>%
+  group_by(storm_id) %>%
+  tally() %>%
+  summary()
+
+
+test_bayesian_rowwise_storm_95_cis <- test_bayesian_rowwise_storm %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~as.data.frame(get_95_ci((.x)))))
+
+
+
+save(test_bayesian_rowwise_storm_95_cis, file = "01_data/test_bayesian_rowwise_95_cis_2K.rda")
+
+
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+###### Historical
+
+test_bayesian_data_in_hist <- storm_hist_proc_hurricane_ggw %>%
+  #rownames_to_column("storm_id") %>%
+  #mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
+  filter(!is.na(date_time_max_wind))  %>%
+  left_join(county_acs_vars_bayesian, 
+            by = c("gridid" = "GEOID")) %>%
+  mutate(exposure = replace_na(exposure, 1)) %>%
+  filter(!is.na(median_house_value))
+# the removed counties are Kenedy and Loving again (I guess rejoined w/ geography?)
+# only median house value appears to be missing, though; wonder if e.g. interpolating would be a good alternative?
+# plus Bedford City County, VA, which was folded into a larger county in 2015
+
+
+#Sys.time()
+#test_bayesian <- predict(modobj, newdata = (test_bayesian_data_in) )
+# OK, no structure as-is (just a long 1-by-x vector); could either use something like `rbind`, or apply rowwise
+# ohh, still NAs for things like median income, etc.; I remember this is a concern
+#Sys.time()
+
+# Well, on the bright side, runs pretty much instantaneously with 100 rows;
+# output is 47000 numbers; I guess 470 per row? seems like an odd 'default' number
+
+
+#test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data_in[13,]))
+# 1000 ~rows (trying to remember how to handle--do you do summary statistics?)
+# so rowwise application might make sense
+
+# OK, this could work:
+
+
+
+test_bayesian_rowwise_hist <- test_bayesian_data_in_hist %>%
+  filter(vmax_sust >= 17.5) %>% # too extreme?
+  group_by(gridid, storm_id) %>%
+  nest() %>%
+  mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
+
+# no--everywhere from 1-2 to hundreds of counties:
+test_bayesian_rowwise_hist %>%
+  ungroup() %>%
+  group_by(storm_id) %>%
+  tally() %>%
+  summary()
+
+
+test_bayesian_rowwise_hist_95_cis <- test_bayesian_rowwise_hist %>%
+  #unnest(data)
+  mutate(impact_summary = purrr::map(.x = impact, .f = ~as.data.frame(get_95_ci((.x)))))
+
+
+
+save(test_bayesian_rowwise_hist_95_cis, file = "01_data/test_bayesian_rowwise_95_cis_hist.rda")
+
+
+
+
+
+
+############################################################
+  
+############################################################
+
+############################################################
+
+############################################################
 
 # Using historical data
 
@@ -64,9 +192,10 @@ test_bayesian_data_hist <- (storm_hist_proc_hurricane_ggw %>%
 # replacing w/ some of the locally-processed STORM data:
   # huh for some reason appears to have retained the  
 
-load(file = "01_data/storm_10k_all_obs_na_proc_hurricane_ggw.rda")
+#load(file = "01_data/storm_10k_all_obs_na_proc_hurricane_ggw.rda")
 
-test_bayesian_data_in <- storm_10k_all_obs_na_proc_hurricane_ggw %>%
+#test_bayesian_data_in <- storm_10k_all_obs_na_proc_hurricane_ggw %>%
+test_bayesian_data_in <- storm_2k_all_obs_na_proc_hurricane_ggw %>%
   #rownames_to_column("storm_id") %>%
   #mutate(storm_id = str_extract(storm_id, pattern = "\\d\\-\\d{4}\\-\\d")) %>%
   filter(!is.na(date_time_max_wind))  %>%
@@ -98,7 +227,7 @@ test_bayesian_single <- predict(modobj, newdata = (test_bayesian_data_in[13,]))
 
 
 test_bayesian_rowwise <- test_bayesian_data_in %>%
-  filter(vmax_sust >= 17.4) %>% # too extreme?
+  filter(vmax_sust >= 17.5) %>% # too extreme?
   group_by(gridid, storm_id) %>%
   nest() %>%
   mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
@@ -237,13 +366,13 @@ test_bayesian_data_hist_cat_1_p <- (storm_hist_proc_hurricane_ggw %>%
 
 
 test_bayesian_rowwise_c1_p <- test_bayesian_data_in_cat_1_p %>%
-  filter(vmax_sust >= 17.4) %>%
+  filter(vmax_sust >= 17.5) %>%
   group_by(gridid, storm_id) %>%
   nest() %>%
   mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
 
 test_bayesian_rowwise_hist_c1_p <- test_bayesian_data_hist_cat_1_p %>%
-  filter(vmax_sust >= 17.4) %>%
+  filter(vmax_sust >= 17.5) %>%
   group_by(gridid, storm_id) %>%
   nest() %>%
   mutate(impact = purrr::map(.x = data, .f = ~predict(modobj, newdata = .x)) )
@@ -291,7 +420,7 @@ ggplot() +
 # exploratory plot on why there are NA's in the Bayesian output:
 ggplot() +
   geom_sf(aes(fill = vmax_sust,
-              alpha = vmax_sust >= 17.4,
+              alpha = vmax_sust >= 17.5,
               geometry = geometry),
           data = test_bayesian_data_in %>%
             filter(storm_id == "0-0001-0") %>%

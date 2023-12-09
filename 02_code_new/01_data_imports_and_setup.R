@@ -32,6 +32,32 @@ source("02_code_new/pred_function.R")
 
 # Counties -- moving up so I can filter by geometry
 
+# Baseline mortality data for >=65 (should double check if there are any later versions)
+counties_mort_65 <- read_tsv("01_data/Multiple Cause of Death, 2018-2021, Single Race_2019_only.txt") %>%
+  dplyr::select(-Notes) %>%
+  clean_names()
+
+# might as well merge all county data this stage, I think
+
+# Setting up county variables for model
+# original approach manually pulled from a downloaded Excel document; think I can get these with the tidycensus package
+# maybe replace tigris should be the same county data
+
+# some of these will have to come from TC and/or windfield models
+
+##  vmax_sust: modeled maximum sustained wind speed at the population centroid of the county during the TC in m/s (from hurricaneexposuredata package)
+##  sust_dur: duration of sustained wind speeds above 20 m/s at the population centroid of the county during the TC (from hurricaneexposuredata package)
+##  exposure: total number of TC exposures experienced by the county during 1999-2015 (derived from hurricaneexposuredata package)
+##  poverty_prop: proportion of residents in poverty          
+##  white_prop: proportion of residents identifying as white
+##  owner_occupied_prop: proportion of homes that are owner-occupied
+##  age_pct_65_plus_prop: proportion of residents age 65+
+##  median_age: county median age
+##  population_density: county population density
+##  median_house_value: county median house value
+##  no_grad_prop: proportion of residents without a high school diploma
+##  year: year the TC occurred
+##  coastal: whether the county is coastal (0/1)
 
 
 us_counties <- get_acs(
@@ -130,6 +156,8 @@ us_counties_wgs84_atlantic <- (us_counties_wgs84 %>%
                          filter(coastline_region %in% 
                                   c("Atlantic", "Gulf of Mexico")))$state_county_fips))
 
+
+save(us_counties_wgs84, file = "us_counties_wgs84.rda")
 #sf_use_s2(FALSE) # turns off spherical geometry; apparently causing issues /w buffer?
 
 #us_counties_wgs84_merged_buffer <- us_counties_wgs84 %>%
@@ -148,164 +176,6 @@ us_counties_wgs84_atlantic <- (us_counties_wgs84 %>%
 
 #enso_years_oni <- read_xlsx("01_data/ENSO JJASON season.xlsx", range = "E1:J71") %>%
 #  clean_names()
-
-# **  Using old data for now--issues w/ date-time agreement in CLIMADA output
-
-############# Loading pre-generated data
-  # STORM (structure/contents seem easier to understand, at least)
-
-  # I think this is consoistent for historical and simulated
-#########################################
-#Entry	Variable name			Unit		Notes on variable
-#1	Year				-		Starts at 0
-#2	Month				-	
-#3	TC number			-		For every year; starts at 0. 
-#4	Time step			3-hourly	For every TC; starts at 0.
-#5	Basin ID			-		0=EP, 1=NA, 2=NI, 3=SI, 4=SP, 5=WP
-#6	Latitude			Deg		Position of the eye.
-#7	Longitude			Deg		Position of the eye. Ranges from 0-360°, with prime meridian at Greenwich.
-#8	Minimum pressure		hPa	
-#9	Maximum wind speed		m/s	
-#10	Radius to maximum winds		km	
-#11	Category			-		.
-#12	Landfall			-		0= no landfall, 1= landfall
-#13	Distance to land		km	
-
-# confused by tc_number
-  # e.g. I see maybe 4-5 "tc 0's" for year 0, each in a different month
-  # am I somehow changing the years?
-    # ohhh--I think I got it: each block of 1000 years restarts at "0"
-      # can't think of any downsides to just adding 1000 per file?
-        # could do in loop; trying to think how to approach otherwise
-    # wasn't coming up before because I was testing with <1000 years
-
-###########################################
-storm_names <- c('year', 'month', 'tc_number', 'time_step', 
-                 'basin_id', 'latitude','longitude',
-                 'min_pressure', 'max_wind_speed','rad_to_max_winds',
-                 'category','landfall', 'dist_to_land')
-
-# 10k years with historical data:
-  # Oh, STORM data is already converted into .tsv files;
-    # 60 files, so need to do some kind of loop <-- maybe just an rbind()?
-
-storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
-                                 full.names = TRUE, pattern = ".*NA.*") 
-
-# trying one of the climate change models
-storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
-                                 full.names = TRUE, pattern = ".*NA.*") 
-
-###########################################################################
-########## OK, need to work out issues with R env. on ALPINE;
-  # let's use say 1000 years for now?
-
-#storm_10k_obs_list <- storm_10k_obs_list[9]
-  # trying next 1000 to see how similar the subsets are
-
-#############################################################################
-
-  # Wow, was forgetting to pre-filter to North Atlantic!
-    # still too big to read in with a direct call, but loop might work now...
-
-  # hopefully not too much memory here...
-# storm_10k_obs_all <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
-  #hmm; 'resource temporarily unavailable'-- assuming it's memory-based?
-    # any way I can reduce RAM load (e.g. pre-aggregating)?
-    # or else run on server
-
-# OK, I guess need to convert to geometry objects and then back if I'm using an
-  # explicit 250km buffer
-
-storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
-####################################################################3
-#########################################################################
-
-
-## S T O P    H E R E    A N D   S K I P  TO `storm_10k_obs_na_proc`
-  # then subset to maybe 2k years; ~11000 storms seems to be around
-  # the upper limit, so work out how to get to that 
-    # don't *have* to use full 1000-year blocks, I suppose 
-
-# for dissertation
-
-#######################################################################
-#######################################################################
-  
-# huh--45,671 storms? Weren't there >100,000??
-  # and 47740 now? can't think of what I would have changed
-
-names(storm_10k_obs_na) <- storm_names
-
-storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
-  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
-  mutate(change = ifelse(is.na(change), 0, change)) %>% 
-  mutate(year_set = cumsum(change)) %>%
-  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
-  dplyr::select(-change) %>%
-  mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
-  #filter((longitude < 290 & latitude > 25)) %>%
-  group_by(year, tc_number, year_set) %>%
-  #dplyr::filter(sum(landfall) > 1) %>%
-  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
-  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
-  dplyr::mutate(cross_sum = cumsum(cross),
-                max_cross_sum = max(cross_sum)) %>%
-  filter(!(us_contact == FALSE & 
-             cross_sum == 0) &
-           !(us_contact == FALSE &
-               cross_sum == max_cross_sum)) %>%
-  #add_tally() %>%
-  #filter(n > 2) %>%
-  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
-  ungroup() %>%
-  mutate(year = year + 1,
-         #hours_base = timestep_3_hourly * 3,
-         hours_base = time_step * 3,
-         hour = hours_base %% 24,
-         day = ((hours_base - hour) / 24) + 1,
-         storm_id = paste(tc_number,
-                          str_pad(year, width = 4,
-                                  side = "left",
-                                  pad = 0),
-                          year_set,
-                          sep = "-"),
-         #wind = max_wind_speed / 1.852 # converting km/h to knots
-         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
-  ) %>% 
-  mutate(date = 
-           paste0(str_pad(year, width = 4, side = "left", pad = 0),
-                  str_pad(month, width = 2, side = "left", pad = 0),
-                  str_pad(day, width = 2, side = "left", pad = 0),
-                  str_pad(hour, width = 2, side = "left", pad = 0),
-                  "00"
-                  
-           )) %>% #,
-  #longitude = longitude -360) %>%# also seems to work as-is?
-  select(storm_id, date, latitude, longitude, wind)
-
-storm_10k_obs_na_proc_full <- storm_10k_obs_na_proc
-
-
-# so ~4700 storms/yr, +/- 100 or so; maybe pick 2 randomly?
-
-set.seed(111)
-sample(x = 1:10, size = 2) # 4, 3
-
-
-# Oh! I didn't include any of the geographic filtering--no wonder it 
-  # took so long!
-storm_2k_obs_na_proc <- storm_10k_obs_na_proc %>%
-  group_by(storm_id) %>%
-  add_count("timesteps") %>%
-  dplyr::filter(timesteps > 1)
-  filter(str_detect(storm_id, "[3|4]$")) # 
-
-save(storm_2k_obs_na_proc, file = "storm_2k_obs_na_proc.rda")
-
-#########################################################3###########33
-###################################################################
-
 
 ###############################################################################################################
 
@@ -536,7 +406,293 @@ save(county_acs_vars_bayesian, file = "01_data/county_acs_vars_bayesian.rda")
     #       #
       #   #
         #
-      
+
+# **  Using old data for now--issues w/ date-time agreement in CLIMADA output
+
+############# Loading pre-generated data
+# STORM (structure/contents seem easier to understand, at least)
+
+# I think this is consistent for historical and simulated
+#########################################
+#Entry	Variable name			Unit		Notes on variable
+#1	Year				-		Starts at 0
+#2	Month				-	
+#3	TC number			-		For every year; starts at 0. 
+#4	Time step			3-hourly	For every TC; starts at 0.
+#5	Basin ID			-		0=EP, 1=NA, 2=NI, 3=SI, 4=SP, 5=WP
+#6	Latitude			Deg		Position of the eye.
+#7	Longitude			Deg		Position of the eye. Ranges from 0-360°, with prime meridian at Greenwich.
+#8	Minimum pressure		hPa	
+#9	Maximum wind speed		m/s	
+#10	Radius to maximum winds		km	
+#11	Category			-		.
+#12	Landfall			-		0= no landfall, 1= landfall
+#13	Distance to land		km	
+
+# confused by tc_number
+# e.g. I see maybe 4-5 "tc 0's" for year 0, each in a different month
+# am I somehow changing the years?
+# ohhh--I think I got it: each block of 1000 years restarts at "0"
+# can't think of any downsides to just adding 1000 per file?
+# could do in loop; trying to think how to approach otherwise
+# wasn't coming up before because I was testing with <1000 years
+
+###########################################
+storm_names <- c('year', 'month', 'tc_number', 'time_step', 
+                 'basin_id', 'latitude','longitude',
+                 'min_pressure', 'max_wind_speed','rad_to_max_winds',
+                 'category','landfall', 'dist_to_land')
+
+# 10k years with historical data:
+# Oh, STORM data is already converted into .tsv files;
+# 60 files, so need to do some kind of loop <-- maybe just an rbind()?
+
+storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
+                                 full.names = TRUE, pattern = ".*NA.*") 
+
+# trying one of the climate change models
+storm_10k_obs_list <- list.files("01_data/storm_10k_sim_v4/STORMV4/VERSIE4/", 
+                                 full.names = TRUE, pattern = ".*NA.*") 
+
+###########################################################################
+########## OK, need to work out issues with R env. on ALPINE;
+# let's use say 1000 years for now?
+
+#storm_10k_obs_list <- storm_10k_obs_list[9]
+# trying next 1000 to see how similar the subsets are
+
+#############################################################################
+
+# Wow, was forgetting to pre-filter to North Atlantic!
+# still too big to read in with a direct call, but loop might work now...
+
+# hopefully not too much memory here...
+# storm_10k_obs_all <- rbind(read_csv(storm_10k_obs_list, col_names = FALSE))
+#hmm; 'resource temporarily unavailable'-- assuming it's memory-based?
+# any way I can reduce RAM load (e.g. pre-aggregating)?
+# or else run on server
+
+# OK, I guess need to convert to geometry objects and then back if I'm using an
+# explicit 250km buffer
+
+storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
+####################################################################3
+#########################################################################
+
+
+## S T O P    H E R E    A N D   S K I P  TO `storm_10k_obs_na_proc`
+# then subset to maybe 2k years; ~11000 storms seems to be around
+# the upper limit, so work out how to get to that 
+# don't *have* to use full 1000-year blocks, I suppose 
+
+# for dissertation
+
+#######################################################################
+#######################################################################
+
+# huh--45,671 storms? Weren't there >100,000??
+# and 47740 now? can't think of what I would have changed
+
+
+names(storm_10k_obs_na) <- storm_names
+
+storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  dplyr::select(-change) %>%
+  mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
+  mutate(longitude = longitude - 360) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(year, tc_number, year_set) %>%
+  #dplyr::filter(sum(landfall) > 1) %>%
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
+  #add_tally() %>%
+  #filter(n > 2) %>%
+  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  ungroup() %>%
+  mutate(year = year + 1,
+         #hours_base = timestep_3_hourly * 3,
+         hours_base = time_step * 3,
+         hour = hours_base %% 24,
+         day = ((hours_base - hour) / 24) + 1,
+         storm_id = paste(tc_number,
+                          str_pad(year, width = 4,
+                                  side = "left",
+                                  pad = 0),
+                          year_set,
+                          sep = "-"),
+         #wind = max_wind_speed / 1.852 # converting km/h to knots
+         wind = max_wind_speed * 1.9438444924 # converting m/s to knots
+  ) %>% 
+  mutate(date = 
+           paste0(str_pad(year, width = 4, side = "left", pad = 0),
+                  str_pad(month, width = 2, side = "left", pad = 0),
+                  str_pad(day, width = 2, side = "left", pad = 0),
+                  str_pad(hour, width = 2, side = "left", pad = 0),
+                  "00"
+                  
+           )) %>% 
+  group_by(storm_id) %>%
+  add_count(name = "timesteps") %>%
+  dplyr::filter(timesteps > 1) %>% #,
+  #longitude = longitude -360) %>%# also seems to work as-is?
+  select(storm_id, date, latitude, longitude, wind)
+
+
+# Check if this feeds into anything downstream:
+
+  #storm_10k_obs_na_proc_full <- storm_10k_obs_na_proc
+###########33
+
+
+# bringing back historical data; stil confused by low exposure counts
+
+  #'historical' coordinate range: 
+    #' lat: 8.9, 68.8
+    #' lon: -107.7, 6.6
+  #' STORM 
+    #' lat: 5.10, 59.9
+    #' lon: 255.1, 358.9 = -104.9, -1.1
+  
+
+
+ibtracs_na_header <- read_csv(file = "01_data/ibtracs.NA.list.v04r00.csv",
+                       n_max = 1)
+
+ibtracs_na <- read_csv(file = "01_data/ibtracs.NA.list.v04r00.csv",
+                      skip = 2, col_names = FALSE)
+
+names(ibtracs_na) <- names(ibtracs_na_header)
+
+  # how are there NAs for WMO wind?
+    # OK, spotty for older data (starts in 1851!), but
+    # even the latest entries are every other point
+    # so I guess need to interpolate or select every other entry?
+      # what's the temporal resolution?
+
+    # Oh, the `USA_wind` column does have every timestep for wind
+
+    # Alright, so the `USA_WIND` column uses 3-hr timesteps,
+    # while the main `WMO_WIND` uses 6-hr with interspersed NAs 
+    # do I trust one or the other more?
+
+# ohhh--they change date formats partway through--that's annoying
+  # earliest is e.g.    1851-06-23 12:00:00
+  # last is             10/24/2023  12:00:00 PM
+  # when's it switch? <-- 1900, so before my cutoff, anyway
+
+ibtracs_na_wmo_winds <- ibtracs_na[,1:12] %>%
+  mutate(storm_id = case_when(NAME == "NOT_NAMED" ~ SID,
+                              TRUE ~ NAME),
+         date = case_when(str_detect(ISO_TIME,
+                                     pattern = "^18") ~ lubridate::ymd_hms(ISO_TIME),
+                          TRUE ~ lubridate::mdy_hm(ISO_TIME),
+                          date = str_remove_all(date, pattern = "\\D")),
+         latitude = LAT,
+         longitude = LON,
+         wind = WMO_WIND) %>%
+  dplyr::select(storm_id, date, latitude, longitude, wind) %>%
+  filter(!is.na(wind))
+
+  # I think this is just HURDAT
+    # would times be interpolated?
+    # Also, I guess should filter to 1980? At least as an ~option
+
+  # OK, the date format appears to be breaking down
+  
+# e.g. 8271900000, 82719001200 as `date`
+
+ibtracs_na_usa_winds <- ibtracs_na %>%
+  filter() %>%
+  mutate(storm_id = case_when(NAME == "NOT_NAMED" ~ SID,
+                              TRUE ~ NAME),
+         date = str_sub(ISO_TIME, start = 1, end = 16) %>%
+           str_remove_all(., pattern = "\\D"),
+         latitude = USA_LAT,
+         longitude = USA_LON,
+         wind = USA_WIND) %>%
+  dplyr::select(storm_id, date, latitude, longitude, wind) %>%
+  filter(!is.na(wind))
+  
+
+
+
+# alright, so I guess from here get it into get_grid_winds-compatible format
+  # single `storm_id` column (merge NAME and ID)
+    # although this doesn't go in directly
+  # date: format: e.g. 198808051800
+  # latitude
+  # longitude (degrees East -- does this match? -- yep)
+  # wind (knots -- already matches)
+
+
+
+
+  # this way I can look at units if relevant
+  # e.g. windspeeds are in knots, etc.
+
+# name is a misnomer now...
+storm_hist_proc <- hurricaneexposuredata::hurr_tracks  %>%
+  #mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+  #mutate(change = ifelse(is.na(change), 0, change)) %>% 
+  #mutate(year_set = cumsum(change)) %>%
+  #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
+  #dplyr::select(-change) %>%
+  mutate(us_contact = (longitude < -64.25 & latitude > 19.63)) %>%
+  #filter((longitude < 290 & latitude > 25)) %>%
+  group_by(storm_id) %>%
+  #dplyr::filter(sum(landfall) > 1) %>%
+  dplyr::mutate(cross = (us_contact - lag(us_contact) != 0)) %>% 
+  mutate(cross = ifelse(is.na(cross), 0, cross)) %>%
+  dplyr::mutate(cross_sum = cumsum(cross),
+                max_cross_sum = max(cross_sum)) %>%
+  filter(!(us_contact == FALSE & 
+             cross_sum == 0) &
+           !(us_contact == FALSE &
+               cross_sum == max_cross_sum)) %>%
+  #add_tally() %>%
+  #filter(n > 2) %>%
+  #filter(sum(us_contact) > 1 & sum(landfall) > 1) %>%
+  ungroup()  %>% 
+  group_by(storm_id) %>%
+  add_count(name = "timesteps") %>%
+  dplyr::filter(timesteps > 1) %>% #,
+  #longitude = longitude -360) %>%# also seems to work as-is?
+  select(storm_id, date, latitude, longitude, wind)
+
+#storm_10k_obs_na_proc_full <- storm_10k_obs_na_proc
+
+# so ~4700 storms/yr, +/- 100 or so; maybe pick 2 randomly?
+
+set.seed(111)
+sample(x = 1:10, size = 2) # 4, 3
+
+
+# Oh! I didn't include any of the geographic filtering--no wonder it 
+# took so long!
+storm_2k_obs_na_proc <- storm_10k_obs_na_proc %>%
+filter(str_detect(storm_id, "[3|4]$")) # 
+
+save(storm_2k_obs_na_proc, file = "storm_2k_obs_na_proc.rda")
+  # 4.66 storms/yr (slightly lower than 10k-yr average of ~4.8)
+save(storm_hist_proc, file = "storm_hist_proc.rda")
+  # 5.7 storms/yr
+
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
+  #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
 
 
 
@@ -652,7 +808,9 @@ storm_hist_proc_hurricane <- hurricaneexposuredata::hurr_tracks  %>%
   #group_by(year, tc_number, year_set) %>%
   mutate(max_max_wind_speed = max(wind)) %>%
   filter(max_max_wind_speed >= 64) %>%  # equivalent to 32.9 m/s, I think
-  mutate(longitude = longitude - 360) %>%
+         
+       ##mutate(longitude = longitude - 360) %>%
+  
   #st_as_sf(coords = c('longitude', 'latitude'),
   #         crs = st_crs(us_counties)) %>%
   #filter(st_intersects(., st_buffer(us_counties_wgs84, 250000)))
@@ -677,6 +835,76 @@ storm_hist_proc_hurricane <- hurricaneexposuredata::hurr_tracks  %>%
   filter(sum(us_contact) > 1) %>% # & sum(landfall) > 1) %>%
   ungroup() 
 
+
+# oh, these are 6hr timesteps; try loading the IBTrACS dataset to 
+  # see if 6hr vs 3hr timesteps make a difference?
+    # oh yeah--I think they would if it's max. windspeed
+
+library(ncdf4)
+library(ncdf4.helpers)
+
+ibtracs_netcdf <- ncdf4::nc_open("IBTrACS.NA.v04r00 (1).nc")
+
+names(ibtracs_netcdf$var)
+  # not sure what e.g. usa_lat vs usa_lon
+  # OK, so e.g. `lat` is the mean of available latitude datapoints
+    # IBTrACS combines multiple agencies' data
+
+# Ok, what variables do I end up using?
+
+  # time vs iso_time?
+ibtracs_data <- tibble( date = nc.get.time.series((ibtracs_netcdf),
+                                                  v = ibtracs_netcdf$varid[22],
+                                                  time.dim.name = "time"))
+ibtracs_data <- tibble(
+  sid = ncdf4::ncvar_get(ibtracs_netcdf, varid = "sid"),
+  season = ncdf4::ncvar_get(ibtracs_netcdf, varid = "season"),
+  name = ncdf4::ncvar_get(ibtracs_netcdf, varid = "name"),
+  lat = ncdf4::ncvar_get(ibtracs_netcdf, varid = "lat"),
+  lon = ncdf4::ncvar_get(ibtracs_netcdf, varid = "lon"),
+  time = ncdf4::ncvar_get(ibtracs_netcdf, varid = "time"),
+  wind = ncdf4::ncvar_get(ibtracs_netcdf, varid = "wmo_wind")
+  )
+
+# OK, some variables like `name` are just # of strorms (2345),
+  # while at least lat and lon are 360 x 2345
+
+  # huh, so actually everything but the name/season/etc, is x360
+    # could it be like ~fields with values at each coordinate point?
+
+  # so, taking the first row(?) (<>[1,]) returns 2345 values
+  # but the first column (<>[,1]) returns 37 values and then all NAs
+
+# OK, so I think what's going on is that there are up to 360 ~timesteps per 
+  # storm, but only one 'row' of unique identifying informaiton
+  # Oh, I'm not sure if the 'rectangular format could work with tibbles
+    # would need to somehow unpack, maybe?
+
+      # OK, running a tibble with 2 of the 360x2345 objects gives 
+      # a 360 x 2 object -- looks like unique columns for each version of the 
+        # time parameter, etc.
+
+
+# So what am I trying to do ~mechanically?
+  # I have blocks of 360 x 2345, representing 2345 per-storm observations
+    # with up to 360 timesteps (6hr?);
+    # would want to 'unwrap' the structure to get rid of NA results in the 
+    # timesteps, and then convert per-timestep results into rows
+
+  # So I want it to end up being e.g. (2345*360) x 1 instead 
+    # with I guess an added result for timestep?
+  # OK,so there's a variable for time, but time x360 is more like   
+    # ~observations
+
+  # so I'm wanting to 'flatten' the structure 
+
+  # wait, that doesn't make sense--there are already separate 
+    # coordinates, etc., within each timestep
+  # trying to think how I'd phrase that in the documentation
+
+
+# OK, so e.g. in the csv, the last storm (2023294N10279) has 26 entries
+  # 
 
 ###################################################3
     # Trying full 10k years
@@ -725,7 +953,7 @@ storm_10k_obs_na <- (read_csv(storm_10k_obs_list, col_names = FALSE))
 names(storm_10k_obs_na) <- storm_names
 
 # OK, even w/ a lot of extra storms off to SE, hurricanes + <=250km cuts it down to ~10% of orig. 
-storm_10k_all_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
+storm_10k_all_obs_na_proc <- storm_10k_obs_na  %>%
   mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
   mutate(change = ifelse(is.na(change), 0, change)) %>% 
   mutate(year_set = cumsum(change)) %>%
@@ -733,7 +961,7 @@ storm_10k_all_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
   dplyr::select(-change) %>%
   group_by(year, tc_number, year_set) %>%
   mutate(max_max_wind_speed = max(max_wind_speed)) %>%
-  filter(max_max_wind_speed >= 32.9) %>% 
+ # filter(max_max_wind_speed >= 32.9) %>% 
   mutate(longitude = longitude - 360) %>%
   #st_as_sf(coords = c('longitude', 'latitude'),
   #         crs = st_crs(us_counties)) %>%
@@ -787,8 +1015,11 @@ storm_10k_all_obs_na_proc_hurricane <- storm_10k_obs_na  %>%
 #save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_proc_hurricane.rda")
 save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_proc_hurricane_NO_LANDFALL.rda")
 
+save(storm_10k_all_obs_na_proc, file = "01_data/storm_10k_all_obs_na_proc_latest.rda")
+
 #st_intersection(storm_10k_obs_na_proc_hurricane, st_buffer(us_counties_wgs84, ))
 
+#storm_2k_all_obs_na_proc <- 
 
 ####################################################
 
@@ -801,12 +1032,13 @@ save(storm_10k_all_obs_na_proc_hurricane, file = "01_data/storm_10k_all_obs_na_p
 names(storm_10k_obs_na) <- storm_names
 
 storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
+  mutate(longitude = longitude - 360) %>%
   mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
   mutate(change = ifelse(is.na(change), 0, change)) %>% 
   mutate(year_set = cumsum(change)) %>%
   #mutate(year = year + year_set*1000) %>% # realized I can just add set # to the storm ID
   dplyr::select(-change) %>%
-  mutate(us_contact = (longitude < 294 & latitude > 19.63)) %>%
+  mutate(us_contact = (longitude < -64.25 & latitude > 19.63)) %>%
   #filter((longitude < 290 & latitude > 25)) %>%
   group_by(year, tc_number, year_set) %>%
   #dplyr::filter(sum(landfall) > 1) %>%
@@ -849,7 +1081,8 @@ storm_10k_obs_na_proc <- storm_10k_obs_na  %>%
 
 
 # checking # of storms
-storm_10k_obs_na  %>%   mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
+storm_10k_obs_na  %>%  
+  mutate(change = (as.numeric(year - lag(year) == -999))) %>% 
   mutate(change = ifelse(is.na(change), 0, change)) %>% 
   mutate(year_set = cumsum(change)) %>% 
   dplyr::select(year, year_set, tc_number) %>% 
