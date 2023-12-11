@@ -27,7 +27,9 @@ doParallel::registerDoParallel(cl = my.cluster)
   # looks like I was missing this step?? How did it work before?
 
 # oh, unless I want to rerun whole parallel processing step,
-  # need to 
+  # can filter row-wise by error status
+
+
 
 storm_2k_all_obs_na_proc_split_ggw <- foreach(
   i = storm_2k_all_obs_na_proc_split,
@@ -54,6 +56,9 @@ print(end - start)
     # well, not successfully in any case -- 199 storms with a single value
       # how many with 2? == 217; not sure if those would cause an error, but
         # seems questionable
+
+storm_2k_all_obs_na_proc_split_ggw <- Filter(function(x) is_tibble(x), storm_2k_all_obs_na_proc_split_ggw)
+
 
 Sys.time()
 storm_2k_all_obs_na_proc_ggw <- do.call("bind_rows",

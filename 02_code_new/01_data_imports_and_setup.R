@@ -595,17 +595,45 @@ ibtracs_na_wmo_winds <- ibtracs_na[,1:12] %>%
                               TRUE ~ NAME),
          date = case_when(str_detect(ISO_TIME,
                                      pattern = "^18") ~ lubridate::ymd_hms(ISO_TIME),
-                          TRUE ~ lubridate::mdy_hm(ISO_TIME),
-                          date = str_remove_all(date, pattern = "\\D")),
+                          str_detect(ISO_TIME, pattern = "/") ~ lubridate::mdy_hm(ISO_TIME)),
          latitude = LAT,
          longitude = LON,
          wind = WMO_WIND) %>%
   dplyr::select(storm_id, date, latitude, longitude, wind) %>%
   filter(!is.na(wind))
 
-  # I think this is just HURDAT
-    # would times be interpolated?
-    # Also, I guess should filter to 1980? At least as an ~option
+  ## NOTE: the warnings about 74935, 37736, dates failing to parse 
+    # seems to be an ~artifact of how it's handling the case_when argument
+    # Although weirdly they don't add up to the number of rows 
+      # ~14k short --- still a bit suspicious there
+
+  # So, USA_WIND is often but not exclusively HURDAT, and appears 
+    # in 3hr timesteps; WMO_WIND and default coordinates is the mean(?) of 
+    # individual agency values, and appears in 6hr timesteps
+
+# Yeah, remember I'm not interested in pre-1980, much less pre-1900, data
+  # so could also just prefilter
+
+
+ibtracs_na_wmo_winds_post_1980 <- ibtracs_na[,1:12] %>%
+  mutate(storm_id = case_when(NAME == "NOT_NAMED" ~ SID,
+                              TRUE ~ NAME),
+         date = lubridate::mdy_hm(ISO_TIME),
+         latitude = LAT,
+         longitude = LON,
+         wind = WMO_WIND) %>%
+  mutate(date = str_remove_all(date, "\\D"),
+          date = substr(date, 1, nchar(date)-2)) %>%
+  filter(!is.na(date) & 
+           lubridate::year(lubridate::ymd_hm(date)) >= 1980) %>%
+  dplyr::select(storm_id, date, 
+                latitude, longitude, wind) %>%
+  filter(!is.na(wind))
+
+ibtracs_na_wmo_winds_post_1980 
+  # yeah, this should cover it; ~309 storms over 42 years
+    # I could get 2023 with the USA_WIND column, 
+      # but I assume provisional for a reason
 
   # OK, the date format appears to be breaking down
   
